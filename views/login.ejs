@@ -1,0 +1,10 @@
+<%- include('_head') %>
+<main><div class="card" style="max-width:420px;margin:4rem auto">
+  <h2>Log in</h2>
+  <% if (error) { %><p style="color:var(--bad)"><%= error %></p><% } %>
+  <form method="post" action="/login" class="stack">
+    <input name="email" type="email" placeholder="Email" required>
+    <input name="password" type="password" placeholder="Password" required>
+    <button>Log in</button>
+  </form>
+</div></main></body></html>
