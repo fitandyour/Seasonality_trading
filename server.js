@@ -20,6 +20,7 @@ app.use(session({
   cookie: { maxAge: 30 * 24 * 3600 * 1000, sameSite: 'lax' },
 }));
 registerAuthRoutes(app);
+app.use('/strategies', require('./routes/strategies').router);
 
 app.get('/healthz', (req, res) => res.json({ ok: true }));
 

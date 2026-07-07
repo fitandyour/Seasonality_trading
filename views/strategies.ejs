@@ -1,0 +1,18 @@
+<%- include('_head') %><%- include('_nav') %>
+<main>
+  <div class="card">
+    <h2>Strategies <a href="/strategies/import" style="font-size:.9rem">+ import</a></h2>
+    <table>
+      <tr><th>Name</th><th>Years</th><th>Latest score</th><th>Status</th><th></th></tr>
+      <% for (const s of strategies) { %>
+      <tr>
+        <td><a href="/strategies/<%= s.id %>"><%= s.save_name %></a></td>
+        <td><%= s.years_back %></td>
+        <td class="score"><%= s.setup_score == null ? '—' : Math.round(s.setup_score) %></td>
+        <td><span class="badge <%= s.flagged ? 'flag' : 'off' %>"><%= s.flagged ? 'FLAGGED' : (s.active ? 'active' : 'paused') %></span></td>
+        <td><form method="post" action="/strategies/<%= s.id %>/toggle" style="margin:0"><button><%= s.active ? 'Pause' : 'Activate' %></button></form></td>
+      </tr>
+      <% } %>
+    </table>
+  </div>
+</main></body></html>

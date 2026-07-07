@@ -1,0 +1,21 @@
+<%- include('_head') %><%- include('_nav') %>
+<main>
+  <div class="card">
+    <h2>Import strategies</h2>
+    <p class="muted">Paste Scarr saved-chart URLs, one per line (open a saved chart on Scarr and copy the address bar).</p>
+    <form method="post" action="/strategies/import" class="stack" style="max-width:100%">
+      <textarea name="urls" rows="8" placeholder="https://scarrtrading.com/SeasonalsGenerator.action?newGeneralForm=..."></textarea>
+      <button>Import</button>
+    </form>
+  </div>
+  <% if (results) { %>
+  <div class="card"><h3>Results</h3><table>
+    <% for (const r of results) { %>
+      <tr>
+        <td><%= r.ok ? r.saveName : r.url.slice(0, 60) + '…' %></td>
+        <td><span class="badge <%= r.ok ? 'flag' : 'fail' %>"><%= r.ok ? 'imported' : r.error %></span></td>
+      </tr>
+    <% } %>
+  </table></div>
+  <% } %>
+</main></body></html>
