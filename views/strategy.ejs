@@ -1,0 +1,34 @@
+<%- include('_head') %><%- include('_nav') %>
+<main>
+  <div class="card">
+    <h2><%= strategy.save_name %></h2>
+    <p class="muted">Window: <%= strategy.config.window.openMonth %> <%= strategy.config.window.openDate %>
+      → <%= strategy.config.window.closeMonth %> <%= strategy.config.window.closeDate %>
+      · <%= strategy.years_back %> years · <%= strategy.active ? 'active' : 'paused' %></p>
+    <% if (score) { %>
+    <table>
+      <tr><th>Date</th><th>Score</th><th>Dir</th><th>Reliability</th><th>Strength</th><th>Tracking</th><th>Entry</th><th>Flagged</th></tr>
+      <tr>
+        <td><%= score.score_date.toISOString ? score.score_date.toISOString().slice(0,10) : score.score_date %></td>
+        <td class="score"><%= Math.round(score.setup_score) %></td>
+        <td><%= score.direction > 0 ? '▲ long' : '▼ short' %></td>
+        <td><%= Math.round(score.reliability * 100) %>%</td>
+        <td><%= Math.round(score.strength * 100) %>%</td>
+        <td><%= score.tracking == null ? '—' : Number(score.tracking).toFixed(2) %></td>
+        <td><%= Math.round(score.stretch_score * 100) %>%</td>
+        <td><span class="badge <%= score.flagged ? 'flag' : 'off' %>"><%= score.flagged ? 'YES' : 'no' %></span></td>
+      </tr>
+    </table>
+    <% } else { %><p class="muted">Not scored yet.</p><% } %>
+  </div>
+  <% if (svg) { %>
+  <div class="card">
+    <h3>This year (blue) vs <%= strategy.years_back %>-year average (grey)</h3>
+    <style>.line.current{stroke:var(--accent);stroke-width:2}.line.avg{stroke:#64748b;stroke-width:1.5;stroke-dasharray:4 3}</style>
+    <%- svg %>
+  </div>
+  <% } %>
+  <% if (strategy.source_url) { %>
+  <p><a href="<%= strategy.source_url %>" target="_blank">Open on Scarr ↗</a></p>
+  <% } %>
+</main></body></html>

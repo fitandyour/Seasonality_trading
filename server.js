@@ -21,6 +21,8 @@ app.use(session({
 }));
 registerAuthRoutes(app);
 app.use('/strategies', require('./routes/strategies').router);
+const dashboard = require('./routes/dashboard');
+app.use('/', dashboard.router);
 
 app.get('/healthz', (req, res) => res.json({ ok: true }));
 
@@ -31,6 +33,10 @@ async function boot() {
   }
   await migrate();
   await seedAdmin();
+  const cron = require('node-cron');
+  cron.schedule('0 7 * * *', () => {
+    dashboard.runSyncNow().catch((err) => console.error('scheduled sync failed:', err));
+  }, { timezone: 'Europe/Amsterdam' });
   const port = process.env.PORT || 3000;
   app.listen(port, () => console.log(`trading-seasonals listening on :${port}`));
 }

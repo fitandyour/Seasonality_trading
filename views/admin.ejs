@@ -1,0 +1,25 @@
+<%- include('_head') %><%- include('_nav') %>
+<main>
+  <div class="card">
+    <h2>Admin</h2>
+    <form method="post" action="/admin/sync" style="display:inline"><button>Sync now</button></form>
+    <form method="post" action="/admin/settings" style="display:inline;margin-left:1rem">
+      Flag threshold: <input name="threshold" type="number" min="0" max="100" value="<%= threshold %>" style="width:5rem">
+      <button>Save</button>
+    </form>
+  </div>
+  <div class="card"><h3>Sync history</h3><table>
+    <tr><th>Started</th><th>Status</th><th>Detail</th></tr>
+    <% for (const r of runs) { %>
+    <tr>
+      <td><%= new Date(r.started_at).toLocaleString('nl-NL') %></td>
+      <td><span class="badge <%= r.status === 'ok' ? 'flag' : (r.status === 'running' ? 'off' : 'fail') %>"><%= r.status %></span></td>
+      <td class="muted" style="font-size:.8rem">
+        <% const d = r.detail || []; %>
+        <%= d.filter(x => x.ok).length %> ok, <%= d.filter(x => !x.ok).length %> failed
+        <% for (const f of d.filter(x => !x.ok).slice(0, 5)) { %><br><%= f.saveName %>: <%= f.error %><% } %>
+      </td>
+    </tr>
+    <% } %>
+  </table></div>
+</main></body></html>

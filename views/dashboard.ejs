@@ -1,0 +1,29 @@
+<%- include('_head') %><%- include('_nav') %>
+<main>
+  <% if (lastRun && lastRun.status !== 'ok') { %>
+    <div class="card" style="border-left:4px solid var(--bad)">
+      Sync <strong><%= lastRun.status %></strong> — started <%= new Date(lastRun.started_at).toLocaleString('nl-NL') %>.
+      Showing last good data. <a href="/admin">Details</a>
+    </div>
+  <% } %>
+  <div class="card">
+    <h2>Today's setups <span class="muted" style="font-size:.85rem"><%= scores.length ? (scores[0].score_date.toISOString ? scores[0].score_date.toISOString().slice(0,10) : scores[0].score_date) : '' %></span></h2>
+    <% if (!scores.length) { %><p class="muted">No scores yet — import strategies and run a sync from <a href="/admin">Admin</a>.</p><% } %>
+    <table>
+      <tr><th>Strategy</th><th>Score</th><th>Dir</th><th>Reliability</th><th>Strength</th><th>Tracking</th><th>Entry</th><th>Window</th></tr>
+      <% for (const r of scores) { %>
+      <tr>
+        <td><a href="/strategies/<%= r.id %>"><%= r.save_name %></a>
+            <% if (r.flagged) { %><span class="badge flag">FLAGGED</span><% } %></td>
+        <td class="score"><%= Math.round(r.setup_score) %></td>
+        <td><%= r.direction > 0 ? '▲ long' : '▼ short' %></td>
+        <td><%= Math.round(r.reliability * 100) %>%</td>
+        <td><%= Math.round(r.strength * 100) %>%</td>
+        <td><%= r.tracking == null ? '—' : Number(r.tracking).toFixed(2) %></td>
+        <td><%= Math.round(r.stretch_score * 100) %>%</td>
+        <td><span class="badge <%= r.in_window ? 'flag' : 'off' %>"><%= r.in_window ? 'open' : 'closed' %></span></td>
+      </tr>
+      <% } %>
+    </table>
+  </div>
+</main></body></html>
