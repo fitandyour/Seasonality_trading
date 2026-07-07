@@ -3,11 +3,7 @@ const MONTH_NUM = {
   July: 7, August: 8, September: 9, October: 10, November: 11, December: 12,
 };
 
-function parseSavedChartUrl(url) {
-  const u = new URL(url);
-  const raw = u.searchParams.get('newGeneralForm');
-  if (!raw) throw new Error('URL has no newGeneralForm parameter');
-  const form = JSON.parse(raw);
+function configFromForm(form) {
   return {
     saveName: form.saveName,
     legs: form.legs,
@@ -23,4 +19,11 @@ function parseSavedChartUrl(url) {
   };
 }
 
-module.exports = { parseSavedChartUrl, MONTH_NUM };
+function parseSavedChartUrl(url) {
+  const u = new URL(url);
+  const raw = u.searchParams.get('newGeneralForm');
+  if (!raw) throw new Error('URL has no newGeneralForm parameter');
+  return configFromForm(JSON.parse(raw));
+}
+
+module.exports = { parseSavedChartUrl, configFromForm, MONTH_NUM };

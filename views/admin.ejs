@@ -3,6 +3,7 @@
   <div class="card">
     <h2>Admin</h2>
     <form method="post" action="/admin/sync" style="display:inline"><button>Sync now</button></form>
+    <form method="post" action="/admin/import-all" style="display:inline;margin-left:1rem"><button>Import all from Scarr</button></form>
     <form method="post" action="/admin/settings" style="display:inline;margin-left:1rem">
       Flag threshold: <input name="threshold" type="number" min="0" max="100" value="<%= threshold %>" style="width:5rem">
       <button>Save</button>

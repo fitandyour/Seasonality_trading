@@ -1,0 +1,14 @@
+{
+  "base": "https://scarrtrading.com",
+  "savedCharts": { "path": "/GetSavedChartsFromDynamoDBServlet", "method": "GET", "userParam": "json" },
+  "chartConfig": {
+    "path": "/GetChartJsonFromDynamoDBServlet",
+    "method": "POST",
+    "keyField": "key",
+    "userField": "user",
+    "databaseField": "database",
+    "database": "saved-charts"
+  },
+  "contracts": { "path": "/GetContractsServlet", "method": "POST", "param": "json" },
+  "chartData": { "path": "/ControllerServlet", "method": "POST", "param": "json" }
+}

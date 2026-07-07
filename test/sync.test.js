@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { splitCurrentAndPrior, labelYear, runSync } = require('../sync');
+const { splitCurrentAndPrior, labelYear, runSync, importAllFromScarr } = require('../sync');
 
 test('labelYear pulls the first 4-digit year', () => {
   assert.equal(labelYear('FC2027H/FC2027J/FC2027K'), 2027);
@@ -20,7 +20,7 @@ function fakeDb(strategies) {
     log,
     async query(text, params) {
       log.push({ text, params });
-      if (/SELECT .* FROM strategies/.test(text)) return { rows: strategies };
+      if (/SELECT id, save_name, years_back, config FROM strategies/.test(text)) return { rows: strategies };
       if (/INSERT INTO sync_runs/.test(text)) return { rows: [{ id: 7 }] };
       if (/SELECT value FROM settings/.test(text)) return { rows: [] };
       return { rows: [] };
@@ -28,68 +28,96 @@ function fakeDb(strategies) {
   };
 }
 
+const STORED_FORM = {
+  saveName: 'Test_HJK', y1: 5,
+  openMonth: 'January', openDate: 1, closeMonth: 'February', closeDate: 1,
+  sampleContract: ['FC2021H'], selected: ['FC2021H', 'FC2020H'],
+  startDate: '2019-12-01T00:00:00.000Z',
+};
+
+const CONTRACTS = [[['FC2027H', 'FC2026H', 'FC2025H', 'FC2024H', 'FC2023H', 'FC2022H', 'FC2021H']]];
+
+// Columnar payload on the current-season axis (Dec 2026 -> Feb 2027):
+// col 1 = current year (partial, rising from a low base = cheap),
+// cols 2..6 = prior years (all rising 1.0 over the window).
 function syntheticPayload() {
-  const rows = [];
+  const values = [];
   for (let d = 0; d < 60; d += 3) {
-    for (const [label, yr, base] of [
-      ['FC2027H', 2027, 1], ['FC2026H', 2026, 2], ['FC2025H', 2025, 2],
-      ['FC2024H', 2024, 2], ['FC2023H', 2023, 2], ['FC2022H', 2022, 2],
-    ]) {
-      const dt = new Date(Date.UTC(yr, 0, 1 + d)); // season Jan -> Mar per year
-      rows.push({ date: dt.toISOString().slice(0, 10), [label]: base + d / 31 });
-    }
+    const dt = new Date(Date.UTC(2027, 0, 1 + d));
+    const ymd = Number(dt.toISOString().slice(0, 10).replace(/-/g, ''));
+    const row = [ymd];
+    row.push(d <= 12 ? 1 + d / 31 : null); // current year: data only up to "today"
+    for (let k = 0; k < 5; k++) row.push(2 + d / 31);
+    values.push(row);
   }
-  return { dataProvider: rows };
+  return { unit: 'd', values };
 }
 
-test('runSync fetches, scores, upserts, and reports per strategy', async () => {
+function fakeClient(overrides = {}) {
+  return {
+    listSavedCharts: async () => ['Test_HJK'],
+    fetchChartConfig: async () => STORED_FORM,
+    fetchContracts: async () => CONTRACTS,
+    fetchChartData: async () => syntheticPayload(),
+    ...overrides,
+  };
+}
+
+test('runSync fetches config, rolls forward, scores, upserts, reports', async () => {
   const strategy = {
     id: 1, save_name: 'Test_HJK', years_back: 5,
-    config: {
-      startDate: '2026-12-01T00:00:00.000Z',
-      window: { openMonth: 'January', openDate: 1, closeMonth: 'February', closeDate: 1 },
-      form: { saveName: 'Test_HJK' },
-    },
+    config: { window: { openMonth: 'January', openDate: 1, closeMonth: 'February', closeDate: 1 }, form: STORED_FORM },
   };
   const db = fakeDb([strategy]);
-  const client = {
-    login: async () => {},
-    fetchChartData: async () => syntheticPayload(),
-  };
-  const { syncRunId, results } = await runSync({ db, client, todayDate: '2027-01-05' });
+  const { syncRunId, results } = await runSync({ db, client: fakeClient(), todayDate: '2027-01-13' });
   assert.equal(syncRunId, 7);
   assert.equal(results.length, 1);
   assert.equal(results[0].ok, true, JSON.stringify(results[0]));
   assert.ok(results[0].points > 0);
   assert.ok(results[0].setupScore >= 0 && results[0].setupScore <= 100);
+  assert.ok(db.log.some((q) => /DELETE FROM series_points/.test(q.text)));
   assert.ok(db.log.some((q) => /INSERT INTO series_points/.test(q.text)));
-  assert.ok(db.log.some((q) => /INSERT INTO daily_scores/.test(q.text)));
+  const scoreInsert = db.log.find((q) => /INSERT INTO daily_scores/.test(q.text));
+  assert.ok(scoreInsert);
+  const details = JSON.parse(scoreInsert.params[10]);
+  assert.equal(details.currentLabel, 'FC2027H'); // rolled forward, positional
+  assert.equal(details.priorLabels.length, 5);
   assert.ok(db.log.some((q) => /UPDATE sync_runs/.test(q.text)));
 });
 
 test('runSync marks a failing strategy but continues, status partial', async () => {
   const good = {
     id: 1, save_name: 'Good', years_back: 5,
-    config: { startDate: '2026-12-01T00:00:00.000Z',
-      window: { openMonth: 'January', openDate: 1, closeMonth: 'February', closeDate: 1 },
-      form: {} },
+    config: { window: { openMonth: 'January', openDate: 1, closeMonth: 'February', closeDate: 1 }, form: STORED_FORM },
   };
-  const bad = { id: 2, save_name: 'Bad', years_back: 5, config: { form: {},
-    window: { openMonth: 'January', openDate: 1, closeMonth: 'February', closeDate: 1 } } };
+  const bad = { id: 2, save_name: 'Bad', years_back: 5, config: { form: null } };
   const db = fakeDb([bad, good]);
   let call = 0;
-  const client = {
-    login: async () => {},
-    fetchChartData: async () => {
+  const client = fakeClient({
+    fetchChartConfig: async (name) => {
       call += 1;
-      if (call === 1) throw new Error('boom');
-      return syntheticPayload();
+      if (name === 'Bad') throw new Error('boom');
+      return STORED_FORM;
     },
-  };
-  const { results } = await runSync({ db, client, todayDate: '2027-01-05' });
+  });
+  const { results } = await runSync({ db, client, todayDate: '2027-01-13' });
   assert.equal(results[0].ok, false);
   assert.match(results[0].error, /boom/);
-  assert.equal(results[1].ok, true);
+  assert.equal(results[1].ok, true, JSON.stringify(results[1]));
   const update = db.log.find((q) => /UPDATE sync_runs/.test(q.text));
   assert.equal(update.params[0], 'partial');
+});
+
+test('importAllFromScarr upserts every saved chart with its config', async () => {
+  const db = fakeDb([]);
+  const client = fakeClient({ listSavedCharts: async () => ['A', 'B'] });
+  const results = await importAllFromScarr({ db, client });
+  assert.equal(results.length, 2);
+  assert.ok(results.every((r) => r.ok));
+  const inserts = db.log.filter((q) => /INSERT INTO strategies/.test(q.text));
+  assert.equal(inserts.length, 2);
+  assert.equal(inserts[0].params[0], 'A');
+  const config = JSON.parse(inserts[0].params[1]);
+  assert.equal(config.yearsBack, 5);
+  assert.equal(config.window.openMonth, 'January');
 });

@@ -1,7 +1,7 @@
 const express = require('express');
 const { pool } = require('../db');
 const { requireAuth } = require('../auth');
-const { runSync, getSetting, setSetting } = require('../sync');
+const { runSync, importAllFromScarr, getSetting, setSetting } = require('../sync');
 const { createClient, loadEndpoints } = require('../scarr');
 
 function todayStr() { return new Date().toISOString().slice(0, 10); }
@@ -9,7 +9,6 @@ function todayStr() { return new Date().toISOString().slice(0, 10); }
 function buildClient() {
   return createClient({
     username: process.env.SCARR_USERNAME,
-    password: process.env.SCARR_PASSWORD,
     endpoints: loadEndpoints(),
   });
 }
@@ -48,6 +47,15 @@ router.post('/admin/settings', async (req, res) => {
 router.post('/admin/sync', async (req, res) => {
   try { await runSyncNow(); } catch (err) { console.error('manual sync failed:', err); }
   res.redirect('/admin');
+});
+
+router.post('/admin/import-all', async (req, res) => {
+  try {
+    await importAllFromScarr({ db: pool, client: buildClient() });
+  } catch (err) {
+    console.error('import-all failed:', err);
+  }
+  res.redirect('/strategies');
 });
 
 module.exports = { router, runSyncNow };

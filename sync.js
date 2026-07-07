@@ -1,4 +1,5 @@
-const { parseChartSeries } = require('./scarr');
+const { parseChartSeries, rollForward } = require('./scarr');
+const { configFromForm } = require('./scarrparse');
 const { computeStrategyMetrics, DEFAULT_WEIGHTS } = require('./scoring');
 
 function labelYear(label) {
@@ -40,31 +41,40 @@ async function upsertPoints(db, rows) {
   }
 }
 
-function seasonStartMonthOf(strategy, currentSeries) {
-  const sd = strategy.config && strategy.config.startDate;
-  if (sd) return new Date(sd).getUTCMonth() + 1;
-  const months = currentSeries.map((p) => Number(p.date.slice(5, 7)));
-  return months.length ? Math.min(...months) : 1;
-}
-
 async function syncOneStrategy({ db, client, strategy, todayDate, threshold, weights }) {
-  const payload = await client.fetchChartData(strategy.config.form);
-  const series = parseChartSeries(payload);
-  const labels = Object.keys(series);
-  if (labels.length < 2) throw new Error('chart returned fewer than 2 year lines');
+  // Prefer the live stored config from Scarr; fall back to the config
+  // captured at import time (pasted URL).
+  let form = strategy.config.form;
+  try {
+    form = await client.fetchChartConfig(strategy.save_name);
+  } catch (err) {
+    if (!form) throw err;
+  }
+  if (!form) throw new Error('no config available');
 
+  const cfg = configFromForm(form);
+  const contracts = await client.fetchContracts(form.sampleContract);
+  const rolled = rollForward(form, contracts, strategy.years_back);
+  const payload = await client.fetchChartData(rolled);
+  const lines = parseChartSeries(payload, rolled.selected);
+  if (lines.length < 2) throw new Error('chart returned fewer than 2 year lines');
+
+  // Wipe and rewrite so rolled-forward labels never mix with stale ones.
+  await db.query('DELETE FROM series_points WHERE strategy_id = $1', [strategy.id]);
   const rows = [];
-  for (const label of labels) {
-    for (const p of series[label]) rows.push([strategy.id, label, p.date, p.value]);
+  for (const line of lines) {
+    for (const p of line.points) rows.push([strategy.id, line.label, p.date, p.value]);
   }
   await upsertPoints(db, rows);
 
-  const { current, prior } = splitCurrentAndPrior(labels, strategy.years_back);
-  const seasonStartMonth = seasonStartMonthOf(strategy, series[current]);
+  // Column order is authoritative: line 0 = current year, then priors.
+  const current = lines[0];
+  const priors = lines.slice(1, 1 + strategy.years_back);
+  const seasonStartMonth = Number(String(payload.values[0][0]).slice(4, 6));
   const m = computeStrategyMetrics({
-    currentYear: series[current],
-    priorYears: prior.map((l) => series[l]),
-    window: strategy.config.window,
+    currentYear: current.points,
+    priorYears: priors.map((l) => l.points),
+    window: cfg.window,
     seasonStartMonth,
     todayDate,
     weights,
@@ -81,8 +91,8 @@ async function syncOneStrategy({ db, client, strategy, todayDate, threshold, wei
        flagged=EXCLUDED.flagged, details=EXCLUDED.details`,
     [strategy.id, todayDate, m.direction, m.reliability, m.strength, m.tracking,
       m.stretchScore, m.setupScore, m.inWindow, flagged,
-      JSON.stringify({ currentLabel: current, priorLabels: prior, nYears: m.nYears,
-        percentile: m.percentile, seasonStartMonth })]);
+      JSON.stringify({ currentLabel: current.label, priorLabels: priors.map((l) => l.label),
+        nYears: m.nYears, percentile: m.percentile, seasonStartMonth })]);
   return { points: rows.length, setupScore: m.setupScore, flagged };
 }
 
@@ -92,7 +102,6 @@ async function runSync({ db, client, todayDate }) {
   const results = [];
   let status = 'ok';
   try {
-    await client.login();
     const { rows: strategies } = await db.query(
       'SELECT id, save_name, years_back, config FROM strategies WHERE active = true ORDER BY save_name');
     const threshold = await getSetting(db, 'score_threshold', 65);
@@ -108,7 +117,7 @@ async function runSync({ db, client, todayDate }) {
     }
   } catch (err) {
     status = 'failed';
-    results.push({ saveName: '(login)', ok: false, error: err.message });
+    results.push({ saveName: '(sync)', ok: false, error: err.message });
   }
   await db.query(
     `UPDATE sync_runs SET status = $1, finished_at = now(), detail = $2 WHERE id = $3`,
@@ -116,4 +125,29 @@ async function runSync({ db, client, todayDate }) {
   return { syncRunId: run.id, results };
 }
 
-module.exports = { runSync, splitCurrentAndPrior, labelYear, upsertPoints, getSetting, setSetting };
+// Pull the full saved-charts list from Scarr and upsert every strategy.
+async function importAllFromScarr({ db, client }) {
+  const names = await client.listSavedCharts();
+  const results = [];
+  for (const name of names) {
+    try {
+      const form = await client.fetchChartConfig(name);
+      const config = configFromForm(form);
+      await db.query(
+        `INSERT INTO strategies (save_name, source_url, config, years_back)
+         VALUES ($1, NULL, $2, $3)
+         ON CONFLICT (save_name) DO UPDATE
+           SET config = EXCLUDED.config, years_back = EXCLUDED.years_back, updated_at = now()`,
+        [name, JSON.stringify(config), config.yearsBack]);
+      results.push({ saveName: name, ok: true });
+    } catch (err) {
+      results.push({ saveName: name, ok: false, error: err.message });
+    }
+  }
+  return results;
+}
+
+module.exports = {
+  runSync, importAllFromScarr, splitCurrentAndPrior, labelYear,
+  upsertPoints, getSetting, setSetting,
+};

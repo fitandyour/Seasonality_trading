@@ -1,80 +1,130 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
+// Endpoint paths/field names discovered 2026-07-08; see docs/scarr-endpoints.md.
 function loadEndpoints() {
   return JSON.parse(fs.readFileSync(path.join(__dirname, 'config/scarr-endpoints.json'), 'utf8'));
 }
 
-function createClient({ username, password, endpoints, fetchImpl = fetch }) {
-  const cookies = {};
+function createClient({ username, endpoints, fetchImpl = fetch }) {
+  if (!username) throw new Error('SCARR_USERNAME is required');
 
-  function cookieHeader() {
-    return Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join('; ');
+  async function get(pathAndQuery) {
+    const res = await fetchImpl(endpoints.base + pathAndQuery, { redirect: 'manual' });
+    if (res.status >= 400) throw new Error(`Scarr GET ${pathAndQuery.split('?')[0]} failed: HTTP ${res.status}`);
+    return res.text();
   }
 
-  function storeCookies(res) {
-    const set = res.headers.getSetCookie ? res.headers.getSetCookie() : [];
-    for (const c of set) {
-      const [pair] = c.split(';');
-      const i = pair.indexOf('=');
-      cookies[pair.slice(0, i).trim()] = pair.slice(i + 1);
-    }
-  }
-
-  async function request(pathAndQuery, { form = null } = {}) {
-    const opts = { method: 'GET', headers: { cookie: cookieHeader() }, redirect: 'manual' };
-    if (form) {
-      opts.method = 'POST';
-      opts.headers['content-type'] = 'application/x-www-form-urlencoded';
-      opts.body = new URLSearchParams(form).toString();
-    }
-    const res = await fetchImpl(endpoints.base + pathAndQuery, opts);
-    storeCookies(res);
-    return res;
-  }
-
-  async function login() {
-    const e = endpoints.login;
-    const form = { ...e.staticFields, [e.usernameField]: username, [e.passwordField]: password };
-    const res = await request(e.path, { form });
-    if (res.status >= 400) throw new Error('Scarr login failed: HTTP ' + res.status);
-    return res;
+  async function postForm(p, fields) {
+    const res = await fetchImpl(endpoints.base + p, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(fields).toString(),
+      redirect: 'manual',
+    });
+    if (res.status >= 400) throw new Error(`Scarr POST ${p} failed: HTTP ${res.status}`);
+    return res.text();
   }
 
   async function listSavedCharts() {
     const e = endpoints.savedCharts;
-    const res = await request(e.path);
-    if (res.status >= 400) throw new Error('Scarr savedCharts failed: HTTP ' + res.status);
-    const body = await res.text();
-    return e.type === 'json' ? JSON.parse(body) : body;
+    return JSON.parse(await get(`${e.path}?${e.userParam}=${encodeURIComponent(username)}`));
   }
 
-  async function fetchChartData(formObj) {
+  async function fetchChartConfig(saveName) {
+    const e = endpoints.chartConfig;
+    const wrapper = JSON.parse(await postForm(e.path, {
+      [e.keyField]: saveName,
+      [e.userField]: username,
+      [e.databaseField]: e.database,
+    }));
+    if (!wrapper.json) throw new Error(`Scarr has no stored config named "${saveName}"`);
+    return JSON.parse(wrapper.json);
+  }
+
+  async function fetchContracts(sampleContract) {
+    const e = endpoints.contracts;
+    const body = await postForm(e.path, { [e.param]: JSON.stringify(sampleContract) });
+    if (!body) throw new Error('Scarr contracts lookup returned an empty response');
+    return JSON.parse(body);
+  }
+
+  async function fetchChartData(form) {
     const e = endpoints.chartData;
-    const encoded = new URLSearchParams({ [e.param]: JSON.stringify(formObj) }).toString();
-    const res = e.method === 'GET'
-      ? await request(e.path + '?' + encoded)
-      : await request(e.path, { form: { [e.param]: JSON.stringify(formObj) } });
-    if (res.status >= 400) throw new Error('Scarr chartData failed: HTTP ' + res.status);
-    return JSON.parse(await res.text());
+    const body = await postForm(e.path, { [e.param]: JSON.stringify(form) });
+    if (!body) throw new Error('Scarr chart data returned an empty response');
+    return JSON.parse(body);
   }
 
-  return { login, listSavedCharts, fetchChartData, _cookies: () => ({ ...cookies }) };
+  return { listSavedCharts, fetchChartConfig, fetchContracts, fetchChartData };
 }
 
-function parseChartSeries(payload) {
-  const rows = Array.isArray(payload) ? payload : payload && payload.dataProvider;
-  if (!Array.isArray(rows)) throw new Error('Unrecognized chart payload shape');
-  const series = {};
-  for (const row of rows) {
-    const date = row.date || row.category;
-    if (!date) continue;
-    for (const [key, value] of Object.entries(row)) {
-      if (key === 'date' || key === 'category' || typeof value !== 'number') continue;
-      (series[key] ||= []).push({ date: String(date).slice(0, 10), value });
+// 'FC2027H' -> { prefix: 'FC', year: 2027, month: 'H' }
+function parseContractCode(code) {
+  const m = String(code).match(/^([A-Z]{1,3})(\d{4})(.+)$/);
+  if (!m) throw new Error(`Unparseable contract code: ${code}`);
+  return { prefix: m[1], year: Number(m[2]), month: m[3] };
+}
+
+// Contracts payload: [[ [leg1 newest-first], [leg2], ... ], ...extras]
+function contractLegs(contractsPayload) {
+  const first = contractsPayload[0];
+  return Array.isArray(first) && Array.isArray(first[0]) ? first : contractsPayload;
+}
+
+// Rebuild sampleContract/selected anchored at the newest available
+// contracts, preserving the saved row's per-leg year offsets and month
+// letters (replicates the site's Contract Alignment). Row 0 = current year.
+function rollForward(form, contractsPayload, yearsBack) {
+  const rows = form.selected || [];
+  if (!rows.length) throw new Error(`Config "${form.saveName}" has no selected contracts`);
+  const legs = rows[0].split('/').map(parseContractCode);
+  const baseYear = Math.min(...legs.map((l) => l.year));
+  const offsets = legs.map((l) => l.year - baseYear);
+
+  const avail = contractLegs(contractsPayload).map((leg) => new Set(leg));
+  if (avail.length !== legs.length) {
+    throw new Error(`Contract legs mismatch: config has ${legs.length}, Scarr returned ${avail.length}`);
+  }
+  const maxYear = Math.max(...[...avail[0]].map((c) => parseContractCode(c).year));
+
+  let anchor = null;
+  for (let b = maxYear; b >= baseYear; b--) {
+    const ok = legs.every((l, i) => avail[i].has(`${l.prefix}${b + offsets[i]}${l.month}`));
+    if (ok) { anchor = b; break; }
+  }
+  if (anchor == null) throw new Error(`No feasible current contracts found for "${form.saveName}"`);
+
+  const selected = [];
+  for (let k = 0; k <= yearsBack; k++) {
+    selected.push(legs.map((l, i) => `${l.prefix}${anchor - k + offsets[i]}${l.month}`).join('/'));
+  }
+  return {
+    ...form,
+    sampleContract: selected[0].split('/'),
+    selected,
+    hiddenAmchartsItems: [],
+  };
+}
+
+// {unit:'d', values:[[yyyymmdd, v0, v1, ...], ...]} + labels (selected order)
+// -> [{ label, points: [{date:'YYYY-MM-DD', value}] }] in column order.
+function parseChartSeries(payload, labels = []) {
+  if (!payload || !Array.isArray(payload.values) || !payload.values.length) {
+    throw new Error('Unrecognized chart payload shape');
+  }
+  const nCols = payload.values[0].length - 1;
+  const lines = [];
+  for (let c = 0; c < nCols; c++) lines.push({ label: labels[c] || `line_${c}`, points: [] });
+  for (const row of payload.values) {
+    const d = String(row[0]);
+    if (d.length !== 8) continue;
+    const date = `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`;
+    for (let c = 0; c < nCols; c++) {
+      if (typeof row[c + 1] === 'number') lines[c].points.push({ date, value: row[c + 1] });
     }
   }
-  return series;
+  return lines;
 }
 
-module.exports = { createClient, parseChartSeries, loadEndpoints };
+module.exports = { createClient, loadEndpoints, parseContractCode, rollForward, parseChartSeries };
