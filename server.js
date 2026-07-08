@@ -12,6 +12,9 @@ app.set('views', path.join(__dirname, 'views'));
 app.use(express.urlencoded({ extended: false }));
 app.use(express.static(path.join(__dirname, 'public')));
 
+// Unauthenticated health check — must precede the auth-protected routers.
+app.get('/healthz', (req, res) => res.json({ ok: true }));
+
 app.use(session({
   store: new PgSession({ pool, createTableIfMissing: true }),
   secret: process.env.SESSION_SECRET || 'dev-only-secret',
@@ -23,8 +26,6 @@ registerAuthRoutes(app);
 app.use('/strategies', require('./routes/strategies').router);
 const dashboard = require('./routes/dashboard');
 app.use('/', dashboard.router);
-
-app.get('/healthz', (req, res) => res.json({ ok: true }));
 
 async function boot() {
   if (!process.env.DATABASE_URL) {
