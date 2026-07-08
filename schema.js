@@ -49,6 +49,9 @@ const MIGRATIONS = [
      key TEXT PRIMARY KEY,
      value JSONB NOT NULL
    )`,
+  // Analog-matching pivot (2026-07-08): per-year features + Claude verdict.
+  `ALTER TABLE daily_scores ADD COLUMN IF NOT EXISTS analog JSONB`,
+  `ALTER TABLE daily_scores ADD COLUMN IF NOT EXISTS verdict JSONB`,
 ];
 
 async function migrate() {

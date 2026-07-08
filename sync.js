@@ -1,6 +1,11 @@
 const { parseChartSeries, rollForward } = require('./scarr');
 const { configFromForm } = require('./scarrparse');
-const { computeStrategyMetrics, DEFAULT_WEIGHTS } = require('./scoring');
+const {
+  analogMatch, windowIndices, seasonIndex, monthDayKey, inWindow,
+} = require('./scoring');
+const { analyzeStrategy } = require('./analysis');
+
+const DEFAULT_ANALOG_YEARS = 5;
 
 function labelYear(label) {
   const m = String(label).match(/(\d{4})/);
@@ -41,7 +46,7 @@ async function upsertPoints(db, rows) {
   }
 }
 
-async function syncOneStrategy({ db, client, strategy, todayDate, threshold, weights }) {
+async function syncOneStrategy({ db, client, strategy, todayDate, threshold, analogYears }) {
   // Prefer the live stored config from Scarr; fall back to the config
   // captured at import time (pasted URL).
   let form = strategy.config.form;
@@ -54,7 +59,8 @@ async function syncOneStrategy({ db, client, strategy, todayDate, threshold, wei
 
   const cfg = configFromForm(form);
   const contracts = await client.fetchContracts(form.sampleContract);
-  const rolled = rollForward(form, contracts, strategy.years_back);
+  // Always the most recent N years (current + N priors), per Henk's requirement.
+  const rolled = rollForward(form, contracts, analogYears);
   const payload = await client.fetchChartData(rolled);
   const lines = parseChartSeries(payload, rolled.selected);
   if (lines.length < 2) throw new Error('chart returned fewer than 2 year lines');
@@ -69,31 +75,35 @@ async function syncOneStrategy({ db, client, strategy, todayDate, threshold, wei
 
   // Column order is authoritative: line 0 = current year, then priors.
   const current = lines[0];
-  const priors = lines.slice(1, 1 + strategy.years_back);
+  const priors = lines.slice(1, 1 + analogYears);
   const seasonStartMonth = Number(String(payload.values[0][0]).slice(4, 6));
-  const m = computeStrategyMetrics({
-    currentYear: current.points,
-    priorYears: priors.map((l) => l.points),
-    window: cfg.window,
+  const { openIdx, closeIdx } = windowIndices(cfg.window, seasonStartMonth);
+  const todayIdx = seasonIndex(monthDayKey(todayDate), seasonStartMonth);
+
+  const analog = analogMatch({
+    current: current.points,
+    priors: priors.map((l) => ({ label: l.label, points: l.points })),
     seasonStartMonth,
     todayDate,
-    weights,
+    windowCloseIdx: closeIdx,
   });
-  const flagged = m.inWindow && m.setupScore >= threshold;
+  const openNow = inWindow(todayIdx, openIdx, closeIdx);
+  const verdict = await analyzeStrategy({ strategy, analog });
+
+  const flagged = openNow && analog.agreementDirection !== 0 && analog.score >= threshold;
   await db.query(
-    `INSERT INTO daily_scores (strategy_id, score_date, direction, reliability, strength,
-                               tracking, stretch_score, setup_score, in_window, flagged, details)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+    `INSERT INTO daily_scores (strategy_id, score_date, direction, setup_score,
+                               in_window, flagged, analog, verdict, details)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
      ON CONFLICT (strategy_id, score_date) DO UPDATE SET
-       direction=EXCLUDED.direction, reliability=EXCLUDED.reliability, strength=EXCLUDED.strength,
-       tracking=EXCLUDED.tracking, stretch_score=EXCLUDED.stretch_score,
-       setup_score=EXCLUDED.setup_score, in_window=EXCLUDED.in_window,
-       flagged=EXCLUDED.flagged, details=EXCLUDED.details`,
-    [strategy.id, todayDate, m.direction, m.reliability, m.strength, m.tracking,
-      m.stretchScore, m.setupScore, m.inWindow, flagged,
+       direction=EXCLUDED.direction, setup_score=EXCLUDED.setup_score,
+       in_window=EXCLUDED.in_window, flagged=EXCLUDED.flagged,
+       analog=EXCLUDED.analog, verdict=EXCLUDED.verdict, details=EXCLUDED.details`,
+    [strategy.id, todayDate, analog.agreementDirection, analog.score, openNow, flagged,
+      JSON.stringify(analog), JSON.stringify(verdict),
       JSON.stringify({ currentLabel: current.label, priorLabels: priors.map((l) => l.label),
-        nYears: m.nYears, percentile: m.percentile, seasonStartMonth })]);
-  return { points: rows.length, setupScore: m.setupScore, flagged };
+        seasonStartMonth })]);
+  return { points: rows.length, setupScore: analog.score, flagged, recommendation: verdict.recommendation };
 }
 
 async function runSync({ db, client, todayDate }) {
@@ -105,10 +115,10 @@ async function runSync({ db, client, todayDate }) {
     const { rows: strategies } = await db.query(
       'SELECT id, save_name, years_back, config FROM strategies WHERE active = true ORDER BY save_name');
     const threshold = await getSetting(db, 'score_threshold', 65);
-    const weights = await getSetting(db, 'weights', DEFAULT_WEIGHTS);
+    const analogYears = await getSetting(db, 'analog_years', DEFAULT_ANALOG_YEARS);
     for (const strategy of strategies) {
       try {
-        const r = await syncOneStrategy({ db, client, strategy, todayDate, threshold, weights });
+        const r = await syncOneStrategy({ db, client, strategy, todayDate, threshold, analogYears });
         results.push({ saveName: strategy.save_name, ok: true, ...r });
       } catch (err) {
         status = 'partial';

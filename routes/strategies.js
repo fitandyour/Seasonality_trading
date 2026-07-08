@@ -2,7 +2,7 @@ const express = require('express');
 const { pool } = require('../db');
 const { requireAuth } = require('../auth');
 const { parseSavedChartUrl } = require('../scarrparse');
-const { toIndexed, seasonalAveragePath, seasonIndex, monthDayKey } = require('../scoring');
+const { seasonIndex, monthDayKey } = require('../scoring');
 const { seasonChartSvg } = require('../chartsvg');
 const { splitCurrentAndPrior } = require('../sync');
 
@@ -68,17 +68,15 @@ router.get('/:id(\\d+)', async (req, res) => {
   let svg = null;
   const labels = Object.keys(byLabel);
   if (labels.length >= 2) {
-    const seasonStartMonth = strategy.config.startDate
-      ? new Date(strategy.config.startDate).getUTCMonth() + 1 : 1;
-    const { current, prior } = splitCurrentAndPrior(labels, strategy.years_back);
-    const avg = seasonalAveragePath(prior.map((l) => toIndexed(byLabel[l], seasonStartMonth)));
-    const curPts = byLabel[current].map((p) => ({
+    const seasonStartMonth = (score && score.details && score.details.seasonStartMonth)
+      || (byLabel[labels[0]].length ? Number(byLabel[labels[0]][0].date.slice(5, 7)) : 1);
+    const { current, prior } = splitCurrentAndPrior(labels, 5);
+    const toPts = (label) => byLabel[label].map((p) => ({
       x: seasonIndex(monthDayKey(p.date), seasonStartMonth), y: p.value }));
-    const avgPts = [...avg.entries()].sort((a, b) => a[0] - b[0]).map(([x, y]) => ({ x, y }));
-    svg = seasonChartSvg({ lines: [
-      { points: avgPts, cls: 'avg' },
-      { points: curPts, cls: 'current' },
-    ] });
+    // Each prior year as its own line (year-by-year, not an average) + this year highlighted.
+    const lines = prior.map((l) => ({ points: toPts(l), cls: 'prior' }));
+    lines.push({ points: toPts(current), cls: 'current' });
+    svg = seasonChartSvg({ lines });
   }
   res.render('strategy', { strategy, score, svg });
 });

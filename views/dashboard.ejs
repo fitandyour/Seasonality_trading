@@ -8,21 +8,27 @@
   <% } %>
   <div class="card">
     <h2>Today's setups <span class="muted" style="font-size:.85rem"><%= scores.length ? (scores[0].score_date.toISOString ? scores[0].score_date.toISOString().slice(0,10) : scores[0].score_date) : '' %></span></h2>
+    <p class="muted" style="font-size:.85rem">Analog matching: this year vs each of the last 5 years, per strategy. Probabilistic analysis, not trade advice.</p>
     <% if (!scores.length) { %><p class="muted">No scores yet — import strategies and run a sync from <a href="/admin">Admin</a>.</p><% } %>
     <table>
-      <tr><th>Strategy</th><th>Score</th><th>Dir</th><th>Reliability</th><th>Strength</th><th>Tracking</th><th>Entry</th><th>Window</th></tr>
-      <% for (const r of scores) { %>
+      <tr><th>Strategy</th><th>Score</th><th>Read</th><th>Dir</th><th>Prob</th><th>Analogs</th><th>Window</th></tr>
+      <% for (const r of scores) { const v = r.verdict || {}; const a = r.analog || {}; %>
       <tr>
         <td><a href="/strategies/<%= r.id %>"><%= r.save_name %></a>
             <% if (r.flagged) { %><span class="badge flag">FLAGGED</span><% } %></td>
-        <td class="score"><%= Math.round(r.setup_score) %></td>
-        <td><%= r.direction > 0 ? '▲ long' : '▼ short' %></td>
-        <td><%= Math.round(r.reliability * 100) %>%</td>
-        <td><%= Math.round(r.strength * 100) %>%</td>
-        <td><%= r.tracking == null ? '—' : Number(r.tracking).toFixed(2) %></td>
-        <td><%= Math.round(r.stretch_score * 100) %>%</td>
+        <td class="score"><%= Math.round(r.setup_score || 0) %></td>
+        <td><span class="badge <%= v.recommendation === 'take' ? 'flag' : (v.recommendation === 'skip' ? 'off' : '') %>"
+                 style="<%= v.recommendation === 'watch' ? 'background:var(--warn);color:#3a2c02' : '' %>"><%= v.recommendation || '—' %></span></td>
+        <td><%= r.direction > 0 ? '▲ long' : (r.direction < 0 ? '▼ short' : '—') %></td>
+        <td><%= v.probability != null ? v.probability + '%' : '—' %></td>
+        <td><%= a.agreementCount != null ? a.agreementCount + '/' + a.analogCount : '—' %></td>
         <td><span class="badge <%= r.in_window ? 'flag' : 'off' %>"><%= r.in_window ? 'open' : 'closed' %></span></td>
       </tr>
+      <% if (v.headline) { %>
+      <tr><td colspan="7" class="muted" style="font-size:.82rem;padding-top:0">
+        <%= v.headline %><% if (v.source === 'fallback') { %> <span class="badge off">no AI key — computed</span><% } %>
+      </td></tr>
+      <% } %>
       <% } %>
     </table>
   </div>

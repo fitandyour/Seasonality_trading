@@ -4,30 +4,59 @@
     <h2><%= strategy.save_name %></h2>
     <p class="muted">Window: <%= strategy.config.window.openMonth %> <%= strategy.config.window.openDate %>
       → <%= strategy.config.window.closeMonth %> <%= strategy.config.window.closeDate %>
-      · <%= strategy.years_back %> years · <%= strategy.active ? 'active' : 'paused' %></p>
-    <% if (score) { %>
-    <table>
-      <tr><th>Date</th><th>Score</th><th>Dir</th><th>Reliability</th><th>Strength</th><th>Tracking</th><th>Entry</th><th>Flagged</th></tr>
-      <tr>
-        <td><%= score.score_date.toISOString ? score.score_date.toISOString().slice(0,10) : score.score_date %></td>
-        <td class="score"><%= Math.round(score.setup_score) %></td>
-        <td><%= score.direction > 0 ? '▲ long' : '▼ short' %></td>
-        <td><%= Math.round(score.reliability * 100) %>%</td>
-        <td><%= Math.round(score.strength * 100) %>%</td>
-        <td><%= score.tracking == null ? '—' : Number(score.tracking).toFixed(2) %></td>
-        <td><%= Math.round(score.stretch_score * 100) %>%</td>
-        <td><span class="badge <%= score.flagged ? 'flag' : 'off' %>"><%= score.flagged ? 'YES' : 'no' %></span></td>
-      </tr>
-    </table>
-    <% } else { %><p class="muted">Not scored yet.</p><% } %>
+      · <%= strategy.active ? 'active' : 'paused' %></p>
   </div>
+
+  <% const v = score && score.verdict; const a = score && score.analog; %>
+  <% if (v) { %>
+  <div class="card">
+    <h3><%= v.headline || 'Read' %>
+      <span class="badge <%= v.recommendation === 'take' ? 'flag' : (v.recommendation === 'skip' ? 'off' : '') %>"
+            style="<%= v.recommendation === 'watch' ? 'background:var(--warn);color:#3a2c02' : '' %>"><%= v.recommendation %></span>
+      <% if (v.source === 'fallback') { %><span class="badge off">computed (no AI key)</span><% } %>
+    </h3>
+    <p><strong><%= v.direction === 'long' ? '▲ Long' : (v.direction === 'short' ? '▼ Short' : 'No edge') %></strong>
+       · probability <strong><%= v.probability %>%</strong> · confidence <%= v.confidence %>
+       · score <%= Math.round(score.setup_score || 0) %>/100</p>
+    <p><%= v.rationale %></p>
+    <p class="muted"><strong>With the trade:</strong> <%= v.targetWith %><br>
+       <strong>Against / risk:</strong> <%= v.targetAgainst %> — <%= v.risk %></p>
+  </div>
+  <% } else { %>
+  <div class="card"><p class="muted">Not analysed yet — run a sync from <a href="/admin">Admin</a>.</p></div>
+  <% } %>
+
+  <% if (a && a.years) { %>
+  <div class="card">
+    <h3>Year-by-year analogs</h3>
+    <table>
+      <tr><th>Year</th><th>Similarity</th><th>Next move</th><th>Best</th><th>Worst</th><th>Level then</th><th>vs now</th></tr>
+      <% for (const y of a.years) { %>
+      <tr>
+        <td><%= y.label %></td>
+        <td><%= y.similarity == null ? '—' : Number(y.similarity).toFixed(2) %></td>
+        <td style="color:<%= y.nextMove > 0 ? 'var(--good)' : (y.nextMove < 0 ? 'var(--bad)' : 'inherit') %>">
+            <%= y.nextMove == null ? '—' : Number(y.nextMove).toFixed(2) %></td>
+        <td><%= y.maxFavorable == null ? '—' : Number(y.maxFavorable).toFixed(2) %></td>
+        <td><%= y.maxAdverse == null ? '—' : Number(y.maxAdverse).toFixed(2) %></td>
+        <td><%= y.levelThen == null ? '—' : Number(y.levelThen).toFixed(2) %></td>
+        <td><%= y.levelGap == null ? '—' : Number(y.levelGap).toFixed(2) %></td>
+      </tr>
+      <% } %>
+    </table>
+    <p class="muted" style="font-size:.82rem">Agreement <%= a.agreementCount %>/<%= a.analogCount %> ·
+       mean next move <%= Number(a.meanNextMove).toFixed(2) %> · opposite-side risk <%= Number(a.oppositeRisk).toFixed(2) %></p>
+  </div>
+  <% } %>
+
   <% if (svg) { %>
   <div class="card">
-    <h3>This year (blue) vs <%= strategy.years_back %>-year average (grey)</h3>
-    <style>.line.current{stroke:var(--accent);stroke-width:2}.line.avg{stroke:#64748b;stroke-width:1.5;stroke-dasharray:4 3}</style>
+    <h3>This year (blue) vs the last 5 years (grey)</h3>
+    <style>.line.current{stroke:var(--accent);stroke-width:2.5}.line.prior{stroke:#64748b;stroke-width:1;opacity:.7}</style>
     <%- svg %>
   </div>
   <% } %>
+
   <% if (strategy.source_url) { %>
   <p><a href="<%= strategy.source_url %>" target="_blank">Open on Scarr ↗</a></p>
   <% } %>
