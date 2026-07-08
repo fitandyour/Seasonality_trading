@@ -50,10 +50,10 @@ Modules (each a separate file with a narrow interface):
 | Module | Responsibility |
 |---|---|
 | `scarr.js` | Login, enumerate saved charts, fetch per-strategy year series |
-| `scoring.js` | Pure functions: metrics + Setup Score from stored series |
+| `scoring.js` | Pure functions: analog-year matching features + ranking |
+| `analysis.js` | Claude expert read per strategy from analog features + chart |
 | `ta.js` | Vision TA: screenshot + notes → structured analysis |
 | `fundamentals.js` | Daily web-search brief per commodity |
-| `verdicts.js` | Claude verdict per flagged setup (score + months + brief) |
 | `server.js` | Express app, routes, auth, cron wiring |
 | `schema.js` | Boot-time migrations |
 
@@ -74,35 +74,52 @@ Modules (each a separate file with a narrow interface):
   Charts file (saved chart definitions) plus manual paste of chart
   URLs; same storage schema, so nothing downstream changes.
 
-## 2. Setup scoring — daily flags
+## 2. Analysis engine — analog-year matching + Claude expert reads
 
-Nightly after sync, per strategy, using the strategy's own years-back
-setting (default 5):
+**Revised 2026-07-08 (hybrid approach).** The engine does NOT average
+prior years into a seasonal band. Henk's requirement: compare **year by
+year** and highlight setups where this year's developing pattern looks
+like specific prior years that then made a high-probability move — with
+the opposite-side risk always stated. Always use the **5 most recent
+years** (current + 5 priors), regardless of what the saved chart stored.
 
-1. **Reliability** — fraction of prior years in which the spread moved
-   in the seasonal direction over the upcoming window (MRCI-style
-   quantified seasonality; MRCI publishes only ≥80% setups).
-2. **Pattern strength** — average seasonal move over the window vs. its
-   year-to-year dispersion; penalizes patterns driven by one outlier
-   year.
-3. **Tracking** — correlation of this year's path-to-date vs. the
-   seasonal average path (is the seasonal "working" this year?).
-4. **Entry stretch** — today's spread level vs. the same calendar date
-   across prior years (percentile / z-score): cheap for a long
-   seasonal, rich for a short.
+**Deterministic features (code, grounded in real numbers).** Per
+strategy, after aligning current + each prior year on the season
+calendar, compute per prior year:
 
-The four metrics combine into a 0–100 **Setup Score** (weights start
-equal; tunable). Strategies above a dashboard-tunable threshold become
-today's flagged setups. For each flagged setup, Claude writes a short
-verdict from the metrics, the specific spread months involved
-(old-crop/new-crop, marketing-year boundaries), and that day's
-fundamentals brief: *tracking / diverging / fundamentals conflict — and
-why*. Anti-seasonal conflicts are explicitly flagged as skip/size-down.
+- **Analog similarity** — correlation of this year's path *so far* to
+  that prior year's path over the same elapsed calendar span.
+- **What it did next** — from today's calendar index to the window
+  close: that year's net move, plus max favorable / max adverse
+  excursion along the way.
+- **Level distance** — how far today's spread sits from where that year
+  was at the same calendar point.
 
-Research basis: filtering beats forecasting (MRCI, SeasonAlgo,
-Barchart's seasonal-spread filtering framework): reliability,
-repeatability, current-year correlation, and fundamental confluence are
-the accepted quality filters.
+Aggregate across the 5 years: directional **agreement** (how many moved
+the same way next), the mean next-move, and the **opposite-side risk**
+(how many / how far the disagreeing years went against). These are
+stored per strategy per day and are the objective, hallucination-proof
+inputs.
+
+**Expert read (Claude).** Claude receives the per-year feature table,
+the strategy metadata (legs, months, window, old-crop/new-crop
+boundaries), and the rendered year-by-year chart, and produces the
+ranked recommendation: direction, the specific analog years that match
+("looks like 2022 and 2024, both fell ~X from here"), target levels, a
+probability read, and the risk case if it breaks the other way. Claude
+never invents a number — every price/level it cites comes from the
+supplied features. If `ANTHROPIC_API_KEY` is absent, the dashboard still
+shows the analog feature table and a deterministic ranking (by agreement
+× similarity); the written reads switch on when the key is set.
+
+Ranking/flagging: a tunable score derived from agreement × mean-similarity
+× move-size, minus opposite-side risk; strategies above a tunable
+threshold and inside their entry window are flagged.
+
+Research basis: filtering beats forecasting (MRCI, SeasonAlgo, Barchart's
+seasonal-spread filtering framework). The pivot from averaged bands to
+explicit analog-year matching reflects that a seasonal average hides the
+year-by-year agreement that actually signals a repeatable move.
 
 ## 3. Vision TA module
 
