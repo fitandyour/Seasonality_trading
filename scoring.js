@@ -139,69 +139,60 @@ function computeStrategyMetrics({ currentYear, priorYears, window, seasonStartMo
   };
 }
 
-// ---- Analog-year matching (Henk's requirement: compare year-by-year, no averaging) ----
+// ---- Aligned analog matching ----
+// Scarr already maps every contract-year onto ONE shared date axis (each
+// `values` row is [date, thisYear, lastYear, ...]). So we compare column-to-
+// column at the same row — no season-index reprojection, which was what
+// mangled long-dated (multi-year) spreads. cols[0] = current/front year,
+// cols[1..] = priors; every col is the same length, null where no data.
 
-// Overlapping-path similarity: Pearson correlation of this year's values
-// vs a prior year's values, aligned by season index, from the season
-// start up to `todayIdx`. Returns null if fewer than 8 shared points.
-function pathSimilarity(currentIndexed, priorIndexed, todayIdx) {
-  const xs = []; const ys = [];
-  for (const [idx, v] of currentIndexed) {
-    if (idx > todayIdx) continue;
-    if (priorIndexed.has(idx)) { xs.push(v); ys.push(priorIndexed.get(idx)); }
-  }
-  if (xs.length < 8) return null;
-  return pearson(xs, ys);
+function median(xs) {
+  if (!xs.length) return 0;
+  const s = [...xs].sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 }
 
-// What a prior year did from today's calendar point to the window close:
-// net move plus the best (favorable) and worst (adverse) excursions,
-// signed so that positive = up. Returns null if endpoints are missing.
-function forwardMove(priorIndexed, todayIdx, windowCloseIdx) {
-  const start = valueAt(priorIndexed, todayIdx);
-  if (start == null) return null;
-  const lo = Math.min(todayIdx, windowCloseIdx);
-  const hi = Math.max(todayIdx, windowCloseIdx);
-  let end = null; let maxUp = 0; let maxDown = 0;
-  for (const [idx, v] of priorIndexed) {
-    if (idx < lo || idx > hi) continue;
-    const delta = v - start;
-    if (delta > maxUp) maxUp = delta;
-    if (delta < maxDown) maxDown = delta;
-    if (end == null || Math.abs(idx - windowCloseIdx) < Math.abs(end.idx - windowCloseIdx)) {
-      end = { idx, v };
+function round2(n) { return n == null ? null : Math.round(n * 100) / 100; }
+
+// Last row where the current/front year still has data — i.e. "today".
+function lastDataRow(col) {
+  for (let i = col.length - 1; i >= 0; i--) if (col[i] != null) return i;
+  return -1;
+}
+
+function alignedAnalog({ cols, labels, todayRow, closeRow, similarityThreshold = 0.85 }) {
+  const current = cols[0];
+  const entry = current[todayRow] != null ? current[todayRow] : null;
+  const years = [];
+  for (let j = 1; j < cols.length; j++) {
+    const prior = cols[j];
+    const xs = []; const ys = [];
+    for (let i = 0; i <= todayRow; i++) {
+      if (current[i] != null && prior[i] != null) { xs.push(current[i]); ys.push(prior[i]); }
     }
+    const similarity = xs.length >= 8 ? pearson(xs, ys) : null;
+    const start = prior[todayRow] != null ? prior[todayRow] : null;
+    let nextMove = null; let maxFav = 0; let maxAdv = 0; let favOffset = 0; let advOffset = 0;
+    if (start != null) {
+      let end = null;
+      for (let i = todayRow; i <= closeRow; i++) {
+        if (prior[i] == null) continue;
+        const d = prior[i] - start;
+        if (d > maxFav) { maxFav = d; favOffset = i - todayRow; }
+        if (d < maxAdv) { maxAdv = d; advOffset = i - todayRow; }
+        end = prior[i];
+      }
+      nextMove = end != null ? end - start : null;
+    }
+    years.push({
+      label: labels[j], similarity, nextMove,
+      maxFavorable: maxFav, maxAdverse: maxAdv, favOffset, advOffset,
+      levelThen: start, levelGap: (entry != null && start != null) ? entry - start : null,
+    });
   }
-  if (end == null) return null;
-  return { nextMove: end.v - start, maxFavorable: maxUp, maxAdverse: maxDown, levelThen: start };
-}
-
-// Per-year analog features + aggregate agreement / opposite-side risk / score.
-function analogMatch({
-  current, priors, seasonStartMonth, todayDate, windowCloseIdx,
-  similarityThreshold = 0.85, tolerance = 6,
-}) {
-  const curIdx = toIndexed(current, seasonStartMonth);
-  const todayIdx = seasonIndex(monthDayKey(todayDate), seasonStartMonth);
-  const levelNow = valueAt(curIdx, todayIdx, tolerance);
-
-  const years = priors.map(({ label, points }) => {
-    const pIdx = toIndexed(points, seasonStartMonth);
-    const similarity = pathSimilarity(curIdx, pIdx, todayIdx);
-    const fwd = forwardMove(pIdx, todayIdx, windowCloseIdx);
-    return {
-      label,
-      similarity,
-      nextMove: fwd ? fwd.nextMove : null,
-      maxFavorable: fwd ? fwd.maxFavorable : null,
-      maxAdverse: fwd ? fwd.maxAdverse : null,
-      levelThen: fwd ? fwd.levelThen : null,
-      levelGap: (fwd && levelNow != null) ? levelNow - fwd.levelThen : null,
-    };
-  });
   years.sort((a, b) => (b.similarity ?? -Infinity) - (a.similarity ?? -Infinity));
 
-  // Close analogs: similar path AND a known forward move.
   const analogs = years.filter((y) => y.similarity != null
     && y.similarity >= similarityThreshold && y.nextMove != null);
   const ups = analogs.filter((y) => y.nextMove > 0);
@@ -213,30 +204,58 @@ function analogMatch({
 
   const meanNextMove = analogs.length
     ? analogs.reduce((s, y) => s + y.nextMove, 0) / analogs.length : 0;
-  // Opposite-side risk: mean adverse magnitude among the agreeing years,
-  // plus the size of any contrary moves.
   const agreeAdverse = withSide.length
-    ? withSide.reduce((s, y) => s + Math.abs(y.maxAdverse || 0), 0) / withSide.length : 0;
+    ? withSide.reduce((s, y) => s + Math.abs(agreementDirection > 0 ? y.maxAdverse : y.maxFavorable), 0) / withSide.length
+    : 0;
   const contraryMove = against.length
     ? against.reduce((s, y) => s + Math.abs(y.nextMove), 0) / against.length : 0;
   const oppositeRisk = agreeAdverse + contraryMove;
 
-  // Ranking score: how many analogs agree, how alike they are, and how big
-  // the expected move is, discounted by opposite-side risk. 0..100.
   let score = 0;
   if (analogs.length && agreementDirection !== 0) {
     const agreeFrac = agreementCount / analogs.length;
     const meanSim = withSide.reduce((s, y) => s + y.similarity, 0) / (withSide.length || 1);
     const moveMag = Math.abs(meanNextMove);
-    const raw = agreeFrac * meanSim * (moveMag / (moveMag + oppositeRisk + 1e-9));
-    score = Math.round(100 * raw);
+    score = Math.round(100 * agreeFrac * meanSim * (moveMag / (moveMag + oppositeRisk + 1e-9)));
   }
 
   return {
-    years, levelNow, todayIdx, windowCloseIdx,
-    analogCount: analogs.length,
-    agreementDirection, agreementCount,
+    entry: round2(entry), years,
+    analogCount: analogs.length, agreementDirection, agreementCount,
     meanNextMove, oppositeRisk, score,
+  };
+}
+
+// Turn an analog result into a concrete trade, or null if none is worth
+// flagging. Entry = this year's current level; target/timing from the agreeing
+// analogs' profit extreme; stop from their worst adverse excursion.
+function identifyTrade(analog, { dates, todayRow, minAnalogs = 3, minScore = 55, buffer = 1.1 } = {}) {
+  const dir = analog.agreementDirection;
+  if (dir === 0 || analog.entry == null) return null;
+  if (analog.agreementCount < minAnalogs || analog.score < minScore) return null;
+  const agree = analog.years.filter((y) => y.similarity != null && y.nextMove != null
+    && Math.sign(y.nextMove) === dir);
+  if (!agree.length) return null;
+
+  const entry = analog.entry;
+  const profitMoves = agree.map((y) => (dir > 0 ? y.maxFavorable : y.maxAdverse));
+  const adverseMoves = agree.map((y) => (dir > 0 ? y.maxAdverse : y.maxFavorable));
+  const peakOffsets = agree.map((y) => (dir > 0 ? y.favOffset : y.advOffset));
+
+  const target = entry + median(profitMoves);
+  const worstAdverse = dir > 0 ? Math.min(...adverseMoves) : Math.max(...adverseMoves);
+  const stop = entry + worstAdverse * buffer;
+  const exitOffset = Math.round(median(peakOffsets));
+  const exitRow = todayRow != null ? todayRow + exitOffset : null;
+  const exitDate = (dates && exitRow != null && dates[exitRow]) ? dates[exitRow] : null;
+
+  const reward = Math.abs(target - entry);
+  const risk = Math.abs(entry - stop) || 1e-9;
+  return {
+    side: dir > 0 ? 'long' : 'short',
+    entry: round2(entry), target: round2(target), stop: round2(stop),
+    exitDate, exitOffset, rr: Math.round((reward / risk) * 10) / 10,
+    agreeCount: agree.length,
   };
 }
 
@@ -244,5 +263,5 @@ module.exports = {
   monthDayKey, seasonIndex, toIndexed, valueAt, windowIndices, seasonalAveragePath,
   reliabilityAndDirection, strengthScore, trackingCorrelation, entryStretch,
   inWindow, DEFAULT_WEIGHTS, computeStrategyMetrics,
-  pathSimilarity, forwardMove, analogMatch,
+  median, round2, lastDataRow, alignedAnalog, identifyTrade,
 };

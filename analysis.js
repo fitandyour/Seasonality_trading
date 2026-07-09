@@ -35,48 +35,56 @@ const VERDICT_SCHEMA = {
   ],
 };
 
-const SYSTEM = `You are a commodity futures spread seasonality analyst. You are given, for one spread strategy, this year's position plus a year-by-year table of how each recent year's spread behaved at the same point in its season and what it did next. Your job is analog matching: identify which prior years this year most resembles, judge whether the developing pattern is likely to repeat, and always state the opposite-side risk if it breaks the other way.
+const SYSTEM = `You are a commodity futures spread seasonality analyst. You are given, for one spread strategy, this year's position, a year-by-year table of how each recent year's spread behaved at the same point in its season and what it did next, and a proposed trade with concrete levels already computed from those analog years. Your job is to judge whether the developing pattern is likely to repeat and explain the setup plainly.
 
 Rules:
-- Every price or level you cite must come from the numbers provided. Never invent a number.
+- Every price or level you cite must come from the numbers provided (the analog table and the proposed trade). Never invent a number.
 - This is probabilistic analysis, NOT a buy/sell recommendation or investment advice.
 - Weigh agreement (how many close analogs moved the same way), similarity (how alike the paths are), move size, and the adverse excursions. A lone outlier year is weak evidence.
-- "probability" is your estimate (0-100) that the expected directional move plays out over the strategy's window.
-- Targets: cite the specific levels the analog years reached (with the trade) and the level that would signal it is failing (against the trade).
+- "probability" is your estimate (0-100) that the proposed move plays out over the window.
+- In targetWith describe the entry and profit target; in targetAgainst describe the stop and what invalidates it. Reuse the proposed trade's numbers.
+- Name the specific analog years driving the read and the year(s) that are the risk case.
 - Be concise and concrete.`;
 
 function fmt(n, d = 2) {
   return n == null ? '—' : Number(n).toFixed(d);
 }
 
-function buildPrompt(strategy, analog) {
+function buildPrompt(strategy, analog, trade) {
   const w = strategy.config && strategy.config.window;
   const window = w ? `${w.openMonth} ${w.openDate} → ${w.closeMonth} ${w.closeDate}` : 'unknown';
   const legs = (strategy.config && strategy.config.legs) || '?';
   const rows = analog.years.map((y) => (
     `  ${y.label}: similarity ${fmt(y.similarity)}, next move ${fmt(y.nextMove)} `
     + `(best ${fmt(y.maxFavorable)}, worst ${fmt(y.maxAdverse)}), `
-    + `it was at ${fmt(y.levelThen)} here vs this year ${fmt(analog.levelNow)} `
+    + `it was at ${fmt(y.levelThen)} here vs this year ${fmt(analog.entry)} `
     + `(gap ${fmt(y.levelGap)})`
   )).join('\n');
 
   const dir = analog.agreementDirection > 0 ? 'up' : analog.agreementDirection < 0 ? 'down' : 'split';
+  const tradeBlock = trade
+    ? `Proposed trade (levels computed from the agreeing analogs):
+  Side: ${trade.side} the spread. Entry ~${fmt(trade.entry)}. Target ${fmt(trade.target)}. Stop ${fmt(trade.stop)}. Ideal exit ${trade.exitDate || '?'}. Reward:risk ≈ ${trade.rr}.`
+    : 'No trade proposed.';
+
   const user = `Strategy: ${strategy.save_name}
 Legs: ${legs}. Seasonal window: ${window}.
-This year's spread level now: ${fmt(analog.levelNow)}.
+This year's spread level now: ${fmt(analog.entry)}.
 
 Per-year analogs (most similar first):
 ${rows}
 
-Aggregate: ${analog.analogCount} close analogs, agreement ${dir} (${analog.agreementCount} agreeing), mean next move ${fmt(analog.meanNextMove)}, opposite-side risk ${fmt(analog.oppositeRisk)}, raw score ${analog.score}/100.
+Aggregate: ${analog.analogCount} close analogs, agreement ${dir} (${analog.agreementCount} agreeing), mean next move ${fmt(analog.meanNextMove)}, opposite-side risk ${fmt(analog.oppositeRisk)}.
 
-Give your analog-matched read for the upcoming window.`;
+${tradeBlock}
+
+Give your read on this setup for the upcoming window.`;
 
   return { system: SYSTEM, user };
 }
 
 // Deterministic verdict from the aggregate — used when Claude is unavailable.
-function fallbackVerdict(analog) {
+function fallbackVerdict(analog, trade) {
   const dir = analog.agreementDirection;
   const direction = dir > 0 ? 'long' : dir < 0 ? 'short' : 'none';
   const probability = direction === 'none' ? 0
@@ -100,8 +108,12 @@ function fallbackVerdict(analog) {
       ? `Of ${analog.analogCount} close analog years, direction was split — no repeatable signal.`
       : `${analog.agreementCount} of ${analog.analogCount} close analog years ${moveWord} over this window (mean ${fmt(analog.meanNextMove)}); opposite-side risk ${fmt(analog.oppositeRisk)}.`,
     analogYears,
-    targetWith: 'see analog next-move magnitudes above',
-    targetAgainst: 'a reversal past this year’s current level flips the read',
+    targetWith: trade
+      ? `Enter ~${fmt(trade.entry)}, target ${fmt(trade.target)} by ${trade.exitDate || '?'} (R:R ≈ ${trade.rr}).`
+      : 'see analog next-move magnitudes above',
+    targetAgainst: trade
+      ? `Stop ${fmt(trade.stop)} — beyond the worst drawdown the analog years saw before the move worked.`
+      : 'a reversal past this year’s current level flips the read',
     risk: `${analog.analogCount - analog.agreementCount} analog year(s) went the other way; sizing should respect the ${fmt(analog.oppositeRisk)} adverse risk.`,
     recommendation,
   };
@@ -123,17 +135,17 @@ async function defaultCreateMessage({ system, user, model }) {
   return JSON.parse(textBlock.text);
 }
 
-async function analyzeStrategy({ strategy, analog, createMessage }) {
+async function analyzeStrategy({ strategy, analog, trade, createMessage }) {
   if (!createMessage) {
-    if (!process.env.ANTHROPIC_API_KEY) return { ...fallbackVerdict(analog), source: 'fallback' };
+    if (!process.env.ANTHROPIC_API_KEY) return { ...fallbackVerdict(analog, trade), source: 'fallback' };
     createMessage = defaultCreateMessage;
   }
-  const { system, user } = buildPrompt(strategy, analog);
+  const { system, user } = buildPrompt(strategy, analog, trade);
   try {
     const verdict = await createMessage({ system, user, model: DEFAULT_MODEL });
     return { ...verdict, source: 'claude' };
   } catch (err) {
-    return { ...fallbackVerdict(analog), source: 'fallback', error: err.message };
+    return { ...fallbackVerdict(analog, trade), source: 'fallback', error: err.message };
   }
 }
 

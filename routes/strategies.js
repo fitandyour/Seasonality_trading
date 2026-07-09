@@ -2,7 +2,6 @@ const express = require('express');
 const { pool } = require('../db');
 const { requireAuth } = require('../auth');
 const { parseSavedChartUrl } = require('../scarrparse');
-const { seasonIndex, monthDayKey } = require('../scoring');
 const { seasonChartSvg } = require('../chartsvg');
 const { splitCurrentAndPrior } = require('../sync');
 
@@ -68,11 +67,15 @@ router.get('/:id(\\d+)', async (req, res) => {
   let svg = null;
   const labels = Object.keys(byLabel);
   if (labels.length >= 2) {
-    const seasonStartMonth = (score && score.details && score.details.seasonStartMonth)
-      || (byLabel[labels[0]].length ? Number(byLabel[labels[0]][0].date.slice(5, 7)) : 1);
+    // Plot on Scarr's shared date axis: x = position in the sorted union of
+    // all dates. This mirrors Scarr exactly and avoids the season-index
+    // reprojection that scrambled multi-year spreads.
+    const allDates = [...new Set(points.map((p) => p.date))].sort();
+    const xOf = new Map(allDates.map((d, i) => [d, i]));
+    const toPts = (label) => byLabel[label]
+      .map((p) => ({ x: xOf.get(p.date), y: p.value }))
+      .sort((a, b) => a.x - b.x);
     const { current, prior } = splitCurrentAndPrior(labels, 5);
-    const toPts = (label) => byLabel[label].map((p) => ({
-      x: seasonIndex(monthDayKey(p.date), seasonStartMonth), y: p.value }));
     // Each prior year as its own line (year-by-year, not an average) + this year highlighted.
     const lines = prior.map((l) => ({ points: toPts(l), cls: 'prior' }));
     lines.push({ points: toPts(current), cls: 'current' });

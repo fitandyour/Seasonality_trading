@@ -1,89 +1,105 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { analogMatch } = require('../scoring');
+const { alignedAnalog, identifyTrade, lastDataRow, median } = require('../scoring');
 
-// Build a season-aligned series from a value function over day-indices.
-function series(startYear, startMonth0, fn, days = 90, step = 1) {
-  const pts = [];
-  for (let d = 0; d < days; d += step) {
-    const dt = new Date(Date.UTC(startYear, startMonth0, 1 + d));
-    pts.push({ date: dt.toISOString().slice(0, 10), value: fn(d) });
-  }
-  return pts;
+// Build columns on a shared row axis. current has data up to `todayRow`.
+function cols({ todayRow, rows, currentFn, priorFns }) {
+  const current = [];
+  for (let i = 0; i < rows; i++) current.push(i <= todayRow ? currentFn(i) : null);
+  return [current, ...priorFns.map((fn) => {
+    const c = []; for (let i = 0; i < rows; i++) c.push(fn(i)); return c;
+  })];
 }
 
-test('analogMatch ranks the most similar prior year first and reports its next move', () => {
-  // Current year rises 0..30 days at slope +0.1 (so far), then we are "today" at day 30.
-  const current = series(2027, 0, (d) => d * 0.1, 31);
-  // Prior A: same early slope, then keeps rising to +6 by day 60 (strong up next).
-  const priorA = series(2026, 0, (d) => d * 0.1, 90);
-  // Prior B: same early slope, then falls hard after day 30 (down next).
-  const priorB = series(2025, 0, (d) => (d <= 30 ? d * 0.1 : 3 - (d - 30) * 0.2), 90);
-  // Prior C: unrelated/noisy, low similarity.
-  const priorC = series(2024, 0, (d) => Math.sin(d) * 2 - 1, 90);
-
-  const res = analogMatch({
-    current,
-    priors: [{ label: 'Y2026', points: priorA }, { label: 'Y2025', points: priorB }, { label: 'Y2024', points: priorC }],
-    seasonStartMonth: 1,
-    todayDate: '2027-01-31',
-    windowCloseIdx: 59, // day 60
-  });
-
-  assert.equal(res.years.length, 3);
-  // A and B both track the early slope perfectly, so both are high-similarity analogs.
-  const byLabel = Object.fromEntries(res.years.map((y) => [y.label, y]));
-  assert.ok(byLabel.Y2026.similarity > 0.99);
-  assert.ok(byLabel.Y2025.similarity > 0.99);
-  assert.ok(byLabel.Y2024.similarity < 0.8, `noisy year sim=${byLabel.Y2024.similarity}`);
-  // A went up next, B went down next.
-  assert.ok(byLabel.Y2026.nextMove > 2, `A nextMove=${byLabel.Y2026.nextMove}`);
-  assert.ok(byLabel.Y2025.nextMove < 0, `B nextMove=${byLabel.Y2025.nextMove}`);
-  // years sorted by similarity descending
-  assert.ok(res.years[0].similarity >= res.years[1].similarity);
+test('lastDataRow finds the final non-null row', () => {
+  assert.equal(lastDataRow([1, 2, null, null]), 1);
+  assert.equal(lastDataRow([null, null]), -1);
 });
 
-test('analogMatch aggregates agreement and opposite-side risk among close analogs', () => {
-  const current = series(2027, 0, (d) => d * 0.1, 31);
-  const up1 = series(2026, 0, (d) => (d <= 30 ? d * 0.1 : 3 + (d - 30) * 0.1), 90);
-  const up2 = series(2025, 0, (d) => (d <= 30 ? d * 0.1 : 3 + (d - 30) * 0.12), 90);
-  const up3 = series(2024, 0, (d) => (d <= 30 ? d * 0.1 : 3 + (d - 30) * 0.08), 90);
-  const down1 = series(2023, 0, (d) => (d <= 30 ? d * 0.1 : 3 - (d - 30) * 0.15), 90);
+test('median handles even and odd lengths', () => {
+  assert.equal(median([3, 1, 2]), 2);
+  assert.equal(median([1, 2, 3, 4]), 2.5);
+});
 
-  const res = analogMatch({
-    current,
-    priors: [
-      { label: 'U1', points: up1 }, { label: 'U2', points: up2 },
-      { label: 'U3', points: up3 }, { label: 'D1', points: down1 },
+test('alignedAnalog: three analogs rise next, one falls — agreement long', () => {
+  const todayRow = 20; const rows = 40;
+  const early = (i) => i * 0.1;                 // shared early slope
+  const up = (base) => (i) => (i <= todayRow ? i * 0.1 : base + (i - todayRow) * 0.2);
+  const down = (i) => (i <= todayRow ? i * 0.1 : 2 - (i - todayRow) * 0.2);
+  const columns = cols({
+    todayRow, rows, currentFn: early,
+    priorFns: [up(2), up(2), up(2), down],
+  });
+  const a = alignedAnalog({
+    cols: columns, labels: ['CUR', 'U1', 'U2', 'U3', 'D1'], todayRow, closeRow: 39,
+  });
+  assert.equal(a.agreementDirection, 1);
+  assert.equal(a.agreementCount, 3);
+  assert.equal(a.analogCount, 4);
+  assert.ok(a.meanNextMove > 0);
+  assert.ok(a.oppositeRisk > 0);
+  assert.ok(a.score > 0 && a.score <= 100);
+  assert.equal(a.entry, columns[0][todayRow]);
+});
+
+test('alignedAnalog: a year with no overlap gets null similarity and is excluded', () => {
+  const todayRow = 20; const rows = 40;
+  const columns = cols({
+    todayRow, rows, currentFn: (i) => i * 0.1,
+    priorFns: [(i) => (i > 30 ? i : null)], // only data after today → no overlap
+  });
+  const a = alignedAnalog({ cols: columns, labels: ['CUR', 'DIS'], todayRow, closeRow: 39 });
+  assert.equal(a.years[0].similarity, null);
+  assert.equal(a.analogCount, 0);
+  assert.equal(a.score, 0);
+});
+
+test('identifyTrade builds a long trade with entry/stop/target/exit from analogs', () => {
+  const todayRow = 20;
+  const analog = {
+    entry: 2.0, agreementDirection: 1, agreementCount: 3, score: 70,
+    years: [
+      { label: 'U1', similarity: 0.97, nextMove: 3.0, maxFavorable: 3.4, maxAdverse: -0.5, favOffset: 12, advOffset: 3 },
+      { label: 'U2', similarity: 0.95, nextMove: 2.6, maxFavorable: 2.8, maxAdverse: -0.7, favOffset: 10, advOffset: 2 },
+      { label: 'U3', similarity: 0.92, nextMove: 2.9, maxFavorable: 3.1, maxAdverse: -0.4, favOffset: 14, advOffset: 4 },
     ],
-    seasonStartMonth: 1,
-    todayDate: '2027-01-31',
-    windowCloseIdx: 59,
-    similarityThreshold: 0.9,
-  });
-
-  // 4 close analogs; 3 up, 1 down.
-  assert.equal(res.agreementDirection, 1);
-  assert.equal(res.agreementCount, 3);
-  assert.equal(res.analogCount, 4);
-  assert.ok(res.meanNextMove > 0);
-  // opposite side risk: the one down year's adverse move is captured (>0 magnitude)
-  assert.ok(res.oppositeRisk > 0, `oppositeRisk=${res.oppositeRisk}`);
-  // score in 0..100
-  assert.ok(res.score >= 0 && res.score <= 100);
+  };
+  const dates = Array.from({ length: 40 }, (_, i) => `2027-01-${String(i + 1).padStart(2, '0')}`);
+  const t = identifyTrade(analog, { dates, todayRow });
+  assert.equal(t.side, 'long');
+  assert.equal(t.entry, 2.0);
+  assert.ok(t.target > t.entry, `target ${t.target}`);
+  assert.ok(t.stop < t.entry, `stop ${t.stop}`);
+  assert.ok(t.exitDate && /^2027-/.test(t.exitDate));
+  assert.ok(t.rr > 0);
+  assert.equal(t.agreeCount, 3);
 });
 
-test('analogMatch handles a year with no overlap gracefully', () => {
-  const current = series(2027, 0, (d) => d * 0.1, 31);
-  const disjoint = series(2026, 6, (d) => d, 30); // July start, no calendar overlap
-  const res = analogMatch({
-    current,
-    priors: [{ label: 'DIS', points: disjoint }],
-    seasonStartMonth: 1,
-    todayDate: '2027-01-31',
-    windowCloseIdx: 59,
-  });
-  assert.equal(res.years[0].similarity, null);
-  assert.equal(res.analogCount, 0);
-  assert.equal(res.score, 0);
+test('identifyTrade returns null when too few analogs agree', () => {
+  const analog = { entry: 2.0, agreementDirection: 1, agreementCount: 2, score: 70, years: [] };
+  assert.equal(identifyTrade(analog, { todayRow: 20 }), null);
+});
+
+test('identifyTrade returns null when score is below threshold', () => {
+  const analog = {
+    entry: 2.0, agreementDirection: 1, agreementCount: 4, score: 40,
+    years: [{ label: 'U1', similarity: 0.9, nextMove: 1, maxFavorable: 1, maxAdverse: -1, favOffset: 5, advOffset: 1 }],
+  };
+  assert.equal(identifyTrade(analog, { todayRow: 20 }), null);
+});
+
+test('identifyTrade builds a short trade mirrored correctly', () => {
+  const analog = {
+    entry: 0.0, agreementDirection: -1, agreementCount: 3, score: 68,
+    years: [
+      { label: 'D1', similarity: 0.96, nextMove: -3.0, maxFavorable: 0.4, maxAdverse: -3.3, favOffset: 2, advOffset: 12 },
+      { label: 'D2', similarity: 0.93, nextMove: -2.6, maxFavorable: 0.6, maxAdverse: -2.9, favOffset: 3, advOffset: 11 },
+      { label: 'D3', similarity: 0.91, nextMove: -2.8, maxFavorable: 0.3, maxAdverse: -3.0, favOffset: 1, advOffset: 13 },
+    ],
+  };
+  const dates = Array.from({ length: 40 }, (_, i) => `2027-02-${String(i + 1).padStart(2, '0')}`);
+  const t = identifyTrade(analog, { dates, todayRow: 5 });
+  assert.equal(t.side, 'short');
+  assert.ok(t.target < t.entry, `target ${t.target}`);
+  assert.ok(t.stop > t.entry, `stop ${t.stop}`);
 });

@@ -21,14 +21,16 @@ const router = express.Router();
 router.use(requireAuth);
 
 router.get('/', async (req, res) => {
-  const { rows: scores } = await pool.query(
+  const { rows: all } = await pool.query(
     `SELECT s.id, s.save_name, d.* FROM daily_scores d
        JOIN strategies s ON s.id = d.strategy_id
       WHERE d.score_date = (SELECT max(score_date) FROM daily_scores)
-      ORDER BY d.flagged DESC, (d.verdict->>'recommendation' = 'take') DESC, d.setup_score DESC`);
+      ORDER BY d.setup_score DESC`);
+  // Only surface strategies where a tradeable setup was identified.
+  const setups = all.filter((r) => r.analog && r.analog.trade);
   const { rows: [lastRun] } = await pool.query(
     'SELECT * FROM sync_runs ORDER BY started_at DESC LIMIT 1');
-  res.render('dashboard', { scores, lastRun });
+  res.render('dashboard', { setups, scanned: all.length, lastRun });
 });
 
 router.get('/admin', async (req, res) => {

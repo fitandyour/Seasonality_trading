@@ -72,39 +72,61 @@ function contractLegs(contractsPayload) {
   return Array.isArray(first) && Array.isArray(first[0]) ? first : contractsPayload;
 }
 
-// Rebuild sampleContract/selected anchored at the newest available
-// contracts, preserving the saved row's per-leg year offsets and month
-// letters (replicates the site's Contract Alignment). Row 0 = current year.
-function rollForward(form, contractsPayload, yearsBack) {
+// Per-leg month letters and cross-year offsets from the saved config.
+function planFromForm(form) {
   const rows = form.selected || [];
   if (!rows.length) throw new Error(`Config "${form.saveName}" has no selected contracts`);
   const legs = rows[0].split('/').map(parseContractCode);
   const baseYear = Math.min(...legs.map((l) => l.year));
-  const offsets = legs.map((l) => l.year - baseYear);
+  return { legs, offsets: legs.map((l) => l.year - baseYear), baseYear };
+}
 
-  const avail = contractLegs(contractsPayload).map((leg) => new Set(leg));
+function availSets(contractsPayload) {
+  return contractLegs(contractsPayload).map((leg) => new Set(leg));
+}
+
+function feasibleAt(legs, offsets, avail, anchor) {
+  return legs.every((l, i) => avail[i] && avail[i].has(`${l.prefix}${anchor + offsets[i]}${l.month}`));
+}
+
+// Feasible base years (descending) for which every leg's contract exists.
+// anchors[0] is the current front; anchors beyond are older cycles.
+function feasibleAnchors(form, contractsPayload) {
+  const { legs, offsets, baseYear } = planFromForm(form);
+  const avail = availSets(contractsPayload);
   if (avail.length !== legs.length) {
     throw new Error(`Contract legs mismatch: config has ${legs.length}, Scarr returned ${avail.length}`);
   }
-  const maxYear = Math.max(...[...avail[0]].map((c) => parseContractCode(c).year));
-
-  let anchor = null;
-  for (let b = maxYear; b >= baseYear; b--) {
-    const ok = legs.every((l, i) => avail[i].has(`${l.prefix}${b + offsets[i]}${l.month}`));
-    if (ok) { anchor = b; break; }
+  const years = [...avail[0]].map((c) => parseContractCode(c).year);
+  const maxYear = Math.max(...years);
+  const out = [];
+  // Scan one year above the newest too, in case a further-out cycle is listed.
+  for (let b = maxYear + 1; b >= baseYear; b--) {
+    if (feasibleAt(legs, offsets, avail, b)) out.push(b);
   }
-  if (anchor == null) throw new Error(`No feasible current contracts found for "${form.saveName}"`);
+  return out;
+}
 
+// Rebuild sampleContract/selected anchored at a specific base year, preserving
+// the saved per-leg offsets and month letters. Row 0 = the anchor year.
+function rollForwardAt(form, contractsPayload, yearsBack, anchor) {
+  const { legs, offsets } = planFromForm(form);
+  const avail = availSets(contractsPayload);
+  if (!feasibleAt(legs, offsets, avail, anchor)) {
+    throw new Error(`Anchor ${anchor} not feasible for "${form.saveName}"`);
+  }
   const selected = [];
   for (let k = 0; k <= yearsBack; k++) {
     selected.push(legs.map((l, i) => `${l.prefix}${anchor - k + offsets[i]}${l.month}`).join('/'));
   }
-  return {
-    ...form,
-    sampleContract: selected[0].split('/'),
-    selected,
-    hiddenAmchartsItems: [],
-  };
+  return { ...form, sampleContract: selected[0].split('/'), selected, hiddenAmchartsItems: [] };
+}
+
+// Current front cycle (newest feasible anchor).
+function rollForward(form, contractsPayload, yearsBack) {
+  const anchors = feasibleAnchors(form, contractsPayload);
+  if (!anchors.length) throw new Error(`No feasible current contracts found for "${form.saveName}"`);
+  return rollForwardAt(form, contractsPayload, yearsBack, anchors[0]);
 }
 
 // {unit:'d', values:[[yyyymmdd, v0, v1, ...], ...]} + labels (selected order)
@@ -127,4 +149,7 @@ function parseChartSeries(payload, labels = []) {
   return lines;
 }
 
-module.exports = { createClient, loadEndpoints, parseContractCode, rollForward, parseChartSeries };
+module.exports = {
+  createClient, loadEndpoints, parseContractCode, parseChartSeries,
+  rollForward, rollForwardAt, feasibleAnchors,
+};

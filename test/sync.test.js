@@ -41,14 +41,15 @@ const STORED_FORM = {
 
 const CONTRACTS = [[['FC2027H', 'FC2026H', 'FC2025H', 'FC2024H', 'FC2023H', 'FC2022H', 'FC2021H']]];
 
-// Columnar payload on the season axis (Jan 2027). Current (col 1) and the 5
-// priors all rise ~1.0/31 per day, so analogs are highly similar and agree up.
+// Columnar payload on one shared axis (Jan–Mar 2027). The current/front line
+// (col 1) has data only through row 29 ("today"); the 5 priors span the whole
+// window and all rise, so analogs are highly similar and agree up → long trade.
 function syntheticPayload() {
   const values = [];
   for (let d = 0; d < 60; d += 1) {
     const dt = new Date(Date.UTC(2027, 0, 1 + d));
     const ymd = Number(dt.toISOString().slice(0, 10).replace(/-/g, ''));
-    const row = [ymd, 1 + d / 31];
+    const row = [ymd, d <= 29 ? 1 + d / 31 : null];
     for (let k = 0; k < 5; k++) row.push(2 + d / 31);
     values.push(row);
   }
@@ -65,7 +66,7 @@ function fakeClient(overrides = {}) {
   };
 }
 
-test('runSync rolls forward, analog-matches, stores verdict, reports', async () => {
+test('runSync analog-matches the aligned axis, identifies a trade, stores verdict', async () => {
   const strategy = {
     id: 1, save_name: 'Test_HJK', years_back: 5,
     config: { window: { openMonth: 'January', openDate: 1, closeMonth: 'February', closeDate: 1 }, form: STORED_FORM },
@@ -75,7 +76,7 @@ test('runSync rolls forward, analog-matches, stores verdict, reports', async () 
   assert.equal(syncRunId, 7);
   assert.equal(results[0].ok, true, JSON.stringify(results[0]));
   assert.ok(results[0].points > 0);
-  assert.ok(results[0].setupScore >= 0 && results[0].setupScore <= 100);
+  assert.equal(results[0].trade, true, 'a trade was identified');
   assert.ok(db.log.some((q) => /DELETE FROM series_points/.test(q.text)));
   assert.ok(db.log.some((q) => /INSERT INTO series_points/.test(q.text)));
 
@@ -83,9 +84,10 @@ test('runSync rolls forward, analog-matches, stores verdict, reports', async () 
   assert.ok(scoreInsert);
   const analog = JSON.parse(scoreInsert.params[6]);
   const verdict = JSON.parse(scoreInsert.params[7]);
-  assert.ok(Array.isArray(analog.years), 'analog.years stored');
   assert.equal(analog.agreementDirection, 1, 'analogs agree up');
-  assert.ok(['long', 'short', 'none'].includes(verdict.direction));
+  assert.ok(analog.trade && analog.trade.side === 'long', 'long trade stored');
+  assert.ok(analog.trade.entry != null && analog.trade.target != null && analog.trade.stop != null);
+  assert.equal(verdict.direction, 'long');
   assert.equal(verdict.source, 'fallback');
   assert.ok(db.log.some((q) => /UPDATE sync_runs/.test(q.text)));
 });

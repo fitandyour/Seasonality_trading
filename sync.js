@@ -1,11 +1,57 @@
-const { parseChartSeries, rollForward } = require('./scarr');
-const { configFromForm } = require('./scarrparse');
-const {
-  analogMatch, windowIndices, seasonIndex, monthDayKey, inWindow,
-} = require('./scoring');
+const { rollForwardAt, feasibleAnchors } = require('./scarr');
+const { configFromForm, MONTH_NUM } = require('./scarrparse');
+const { alignedAnalog, identifyTrade, lastDataRow } = require('./scoring');
 const { analyzeStrategy } = require('./analysis');
 
 const DEFAULT_ANALOG_YEARS = 5;
+
+function pad2(n) { return String(n).padStart(2, '0'); }
+
+// The row nearest the next occurrence of the window-close calendar date at or
+// after today. Falls back to the last row when the window has already passed.
+function closeRowOf(dates, window, todayRow) {
+  const [ty, tm, td] = dates[todayRow].split('-').map(Number);
+  const cm = MONTH_NUM[window.closeMonth]; const cd = window.closeDate;
+  const year = (cm < tm || (cm === tm && cd < td)) ? ty + 1 : ty;
+  const target = `${year}-${pad2(cm)}-${pad2(cd)}`;
+  for (let i = todayRow + 1; i < dates.length; i++) if (dates[i] >= target) return i;
+  return dates.length - 1;
+}
+
+// Scarr's columnar payload → shared date axis + one value column per year.
+function matrixFromPayload(payload) {
+  const dates = payload.values.map((r) => {
+    const s = String(r[0]);
+    return `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`;
+  });
+  const nCols = payload.values[0].length - 1;
+  const cols = [];
+  for (let c = 0; c < nCols; c++) {
+    cols.push(payload.values.map((r) => (typeof r[c + 1] === 'number' ? r[c + 1] : null)));
+  }
+  return { dates, cols };
+}
+
+// Fetch one contract cycle (front or next), align it, and identify a trade.
+async function analyseCycle({ client, form, contracts, anchor, analogYears, window }) {
+  const rolled = rollForwardAt(form, contracts, analogYears, anchor);
+  const payload = await client.fetchChartData(rolled);
+  const { dates, cols } = matrixFromPayload(payload);
+  if (cols.length < 2) throw new Error('chart returned fewer than 2 year lines');
+  const todayRow = lastDataRow(cols[0]);
+  const base = { anchor, rolled, dates, cols, labels: rolled.selected, todayRow };
+  if (todayRow < 8) return { ...base, analog: null, trade: null };
+  const closeRow = closeRowOf(dates, window, todayRow);
+  const analog = alignedAnalog({ cols, labels: rolled.selected, todayRow, closeRow });
+  const trade = identifyTrade(analog, { dates, todayRow });
+  analog.trade = trade || null;
+  return { ...base, analog, trade: trade || null };
+}
+
+function cycleRank(c) {
+  if (c.trade) return 1000 + (c.analog.score || 0);
+  return c.analog ? (c.analog.score || 0) : -1;
+}
 
 function labelYear(label) {
   const m = String(label).match(/(\d{4})/);
@@ -46,7 +92,7 @@ async function upsertPoints(db, rows) {
   }
 }
 
-async function syncOneStrategy({ db, client, strategy, todayDate, threshold, analogYears }) {
+async function syncOneStrategy({ db, client, strategy, todayDate, analogYears }) {
   // Prefer the live stored config from Scarr; fall back to the config
   // captured at import time (pasted URL).
   let form = strategy.config.form;
@@ -59,38 +105,41 @@ async function syncOneStrategy({ db, client, strategy, todayDate, threshold, ana
 
   const cfg = configFromForm(form);
   const contracts = await client.fetchContracts(form.sampleContract);
-  // Always the most recent N years (current + N priors), per Henk's requirement.
-  const rolled = rollForward(form, contracts, analogYears);
-  const payload = await client.fetchChartData(rolled);
-  const lines = parseChartSeries(payload, rolled.selected);
-  if (lines.length < 2) throw new Error('chart returned fewer than 2 year lines');
+  const anchors = feasibleAnchors(form, contracts);
+  if (!anchors.length) throw new Error(`no feasible contracts for "${strategy.save_name}"`);
+  // Current front + next cycle (when Scarr lists a further-out contract year).
+  const cycleYears = anchors.slice(0, 2);
 
-  // Wipe and rewrite so rolled-forward labels never mix with stale ones.
+  const cycles = [];
+  for (const anchor of cycleYears) {
+    try {
+      cycles.push(await analyseCycle({
+        client, form, contracts, anchor, analogYears, window: cfg.window,
+      }));
+    } catch (err) { /* skip an unbuildable cycle */ }
+  }
+  if (!cycles.length) throw new Error('no cycle produced usable data');
+
+  // Prefer the cycle with an identified trade; else the highest-scoring one.
+  cycles.sort((a, b) => cycleRank(b) - cycleRank(a));
+  const chosen = cycles[0];
+
+  // Wipe and rewrite the chosen cycle's series so labels never mix.
   await db.query('DELETE FROM series_points WHERE strategy_id = $1', [strategy.id]);
   const rows = [];
-  for (const line of lines) {
-    for (const p of line.points) rows.push([strategy.id, line.label, p.date, p.value]);
-  }
+  chosen.cols.forEach((col, j) => {
+    col.forEach((v, i) => {
+      if (v != null) rows.push([strategy.id, chosen.labels[j], chosen.dates[i], v]);
+    });
+  });
   await upsertPoints(db, rows);
 
-  // Column order is authoritative: line 0 = current year, then priors.
-  const current = lines[0];
-  const priors = lines.slice(1, 1 + analogYears);
-  const seasonStartMonth = Number(String(payload.values[0][0]).slice(4, 6));
-  const { openIdx, closeIdx } = windowIndices(cfg.window, seasonStartMonth);
-  const todayIdx = seasonIndex(monthDayKey(todayDate), seasonStartMonth);
+  const analog = chosen.analog
+    || { years: [], analogCount: 0, agreementDirection: 0, agreementCount: 0, score: 0, trade: null };
+  // Only spend a Claude call where there is an actual setup to explain.
+  const verdict = chosen.trade ? await analyzeStrategy({ strategy, analog, trade: chosen.trade }) : null;
+  const flagged = !!chosen.trade;
 
-  const analog = analogMatch({
-    current: current.points,
-    priors: priors.map((l) => ({ label: l.label, points: l.points })),
-    seasonStartMonth,
-    todayDate,
-    windowCloseIdx: closeIdx,
-  });
-  const openNow = inWindow(todayIdx, openIdx, closeIdx);
-  const verdict = await analyzeStrategy({ strategy, analog });
-
-  const flagged = openNow && analog.agreementDirection !== 0 && analog.score >= threshold;
   await db.query(
     `INSERT INTO daily_scores (strategy_id, score_date, direction, setup_score,
                                in_window, flagged, analog, verdict, details)
@@ -99,11 +148,10 @@ async function syncOneStrategy({ db, client, strategy, todayDate, threshold, ana
        direction=EXCLUDED.direction, setup_score=EXCLUDED.setup_score,
        in_window=EXCLUDED.in_window, flagged=EXCLUDED.flagged,
        analog=EXCLUDED.analog, verdict=EXCLUDED.verdict, details=EXCLUDED.details`,
-    [strategy.id, todayDate, analog.agreementDirection, analog.score, openNow, flagged,
-      JSON.stringify(analog), JSON.stringify(verdict),
-      JSON.stringify({ currentLabel: current.label, priorLabels: priors.map((l) => l.label),
-        seasonStartMonth })]);
-  return { points: rows.length, setupScore: analog.score, flagged, recommendation: verdict.recommendation };
+    [strategy.id, todayDate, analog.agreementDirection, analog.score, flagged, flagged,
+      JSON.stringify(analog), verdict ? JSON.stringify(verdict) : null,
+      JSON.stringify({ anchor: chosen.anchor, currentLabel: chosen.labels[0], todayDate })]);
+  return { points: rows.length, setupScore: analog.score, flagged, trade: !!chosen.trade };
 }
 
 async function runSync({ db, client, todayDate }) {
@@ -114,11 +162,10 @@ async function runSync({ db, client, todayDate }) {
   try {
     const { rows: strategies } = await db.query(
       'SELECT id, save_name, years_back, config FROM strategies WHERE active = true ORDER BY save_name');
-    const threshold = await getSetting(db, 'score_threshold', 65);
     const analogYears = await getSetting(db, 'analog_years', DEFAULT_ANALOG_YEARS);
     for (const strategy of strategies) {
       try {
-        const r = await syncOneStrategy({ db, client, strategy, todayDate, threshold, analogYears });
+        const r = await syncOneStrategy({ db, client, strategy, todayDate, analogYears });
         results.push({ saveName: strategy.save_name, ok: true, ...r });
       } catch (err) {
         status = 'partial';

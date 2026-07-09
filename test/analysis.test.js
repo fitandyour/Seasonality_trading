@@ -11,8 +11,10 @@ const STRATEGY = {
   },
 };
 
+const TRADE = { side: 'long', entry: 1.0, target: 2.8, stop: 0.4, exitDate: '2027-02-10', rr: 3.0, agreeCount: 3 };
+
 const ANALOG = {
-  levelNow: 1.0,
+  entry: 1.0,
   analogCount: 4,
   agreementDirection: 1,
   agreementCount: 3,
@@ -27,29 +29,32 @@ const ANALOG = {
   ],
 };
 
-test('fallbackVerdict derives a long verdict from a bullish aggregate', () => {
-  const v = fallbackVerdict(ANALOG);
+test('fallbackVerdict derives a long verdict and echoes the trade levels', () => {
+  const v = fallbackVerdict(ANALOG, TRADE);
   assert.equal(v.direction, 'long');
   assert.ok(v.probability >= 50 && v.probability <= 100);
   assert.ok(['low', 'medium', 'high'].includes(v.confidence));
   assert.match(v.rationale, /3 of 4/);
-  assert.ok(Array.isArray(v.analogYears));
+  assert.match(v.targetWith, /2\.8/);   // target level echoed
+  assert.match(v.targetAgainst, /0\.4/); // stop echoed
 });
 
 test('fallbackVerdict returns direction none when analogs disagree evenly', () => {
-  const v = fallbackVerdict({ ...ANALOG, agreementDirection: 0, agreementCount: 2, analogCount: 4, score: 0 });
+  const v = fallbackVerdict({ ...ANALOG, agreementDirection: 0, agreementCount: 2, analogCount: 4, score: 0 }, null);
   assert.equal(v.direction, 'none');
   assert.equal(v.recommendation, 'skip');
 });
 
-test('buildPrompt embeds the real analog numbers and framing', () => {
-  const { system, user } = buildPrompt(STRATEGY, ANALOG);
+test('buildPrompt embeds the analog numbers, framing, and the proposed trade', () => {
+  const { system, user } = buildPrompt(STRATEGY, ANALOG, TRADE);
   assert.match(system, /analysis, not.*advice/i);
   assert.match(user, /Feeder cattle_A_ HJK/);
   assert.match(user, /FC2026/);
-  assert.match(user, /0\.97/);      // similarity rendered
-  assert.match(user, /2\.1/);       // next move rendered
-  assert.match(user, /January 1/);  // window
+  assert.match(user, /0\.97/);       // similarity rendered
+  assert.match(user, /2\.1/);        // next move rendered
+  assert.match(user, /January 1/);   // window
+  assert.match(user, /Proposed trade/);
+  assert.match(user, /Stop 0\.40/);  // trade stop rendered
 });
 
 test('analyzeStrategy uses an injected createMessage and tags source claude', async () => {
