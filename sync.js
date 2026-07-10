@@ -32,23 +32,30 @@ function matrixFromPayload(payload) {
   return { dates, cols };
 }
 
-// Fetch one contract cycle, align it, and identify a mechanical candidate.
-async function analyseCycle({ client, form, contracts, anchor, analogYears, window }) {
-  const rolled = rollForwardAt(form, contracts, analogYears, anchor);
-  const payload = await client.fetchChartData(rolled);
-  const { dates, cols } = matrixFromPayload(payload);
-  if (cols.length < 2) throw new Error('chart returned fewer than 2 year lines');
-  const todayRow = lastDataRow(cols[0]);
-  const base = {
-    anchor, rolled, dates, cols, labels: rolled.selected,
-    front: rolled.selected[0], todayRow,
-    axisEnd: dates[dates.length - 1],
-  };
-  if (todayRow < 5) return { ...base, analog: null, trade: null };
+function daysBetweenStr(a, b) { return Math.abs(Math.round((new Date(b) - new Date(a)) / 86400000)); }
+
+function addDays(dateStr, n) {
+  const d = new Date(dateStr + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+// Analyse one line (the subject) against the `analogYears` lines that follow
+// it on the SAME shared axis. Scarr maps every contract year onto the current
+// season's axis by seasonal offset, so a next-year spread simply has its data
+// ending earlier on the axis — that point is its own "today". realDayShift
+// translates axis dates to real calendar dates for display (≈ one season
+// forward for the next cycle).
+function analyseLine({ dates, cols, labels, startCol, analogYears, window, realDayShift = 0 }) {
+  const subCols = cols.slice(startCol, startCol + 1 + analogYears);
+  const subLabels = labels.slice(startCol, startCol + 1 + analogYears);
+  const todayRow = lastDataRow(subCols[0]);
+  if (todayRow < 5 || subCols.length < 3) return null;
   const closeRow = closeRowOf(dates, window, todayRow);
-  const analog = alignedAnalog({ cols, labels: rolled.selected, todayRow, closeRow });
+  const analog = alignedAnalog({ cols: subCols, labels: subLabels, todayRow, closeRow });
   const trade = identifyTrade(analog, { dates, todayRow });
-  return { ...base, analog, trade: trade || null };
+  if (trade && trade.exitDate && realDayShift) trade.exitDate = addDays(trade.exitDate, realDayShift);
+  return { analog, trade: trade || null, labels: subLabels, front: subLabels[0] };
 }
 
 function labelYear(label) {
@@ -106,49 +113,72 @@ async function syncOneStrategy({ db, client, strategy, todayDate, analogYears })
   const anchors = feasibleAnchors(form, contracts);
   if (!anchors.length) throw new Error(`no feasible contracts for "${strategy.save_name}"`);
 
-  // Fetch the two newest cycles; keep the ones still alive (axis end not yet
-  // past). The alive cycle expiring soonest is what you'd trade now
-  // ("current"); the later one is "next" (MRCI: entry date determines the
-  // delivery months).
-  const fetched = [];
-  for (const anchor of anchors.slice(0, 2)) {
-    try {
-      fetched.push(await analyseCycle({
-        client, form, contracts, anchor, analogYears, window: cfg.window,
-      }));
-    } catch (err) { /* skip an unbuildable cycle */ }
-  }
-  if (!fetched.length) throw new Error('no cycle produced usable data');
-  let alive = fetched.filter((c) => c.axisEnd >= todayDate);
-  if (!alive.length) alive = [fetched[0]];
-  alive.sort((a, b) => (a.axisEnd < b.axisEnd ? -1 : 1));
-  alive = alive.slice(0, 2);
-  alive.forEach((c, i) => { c.label = i === 0 ? 'current' : 'next'; });
+  // ONE fetch at the newest anchor, with 2 extra rows so both the possible
+  // next-year line and the live line keep a full set of analogs beneath them.
+  // Scarr maps every year onto one shared season axis, so cycles are
+  // distinguished by where each line's data ENDS, not by separate requests.
+  const rolled = rollForwardAt(form, contracts, analogYears + 1, anchors[0]);
+  const payload = await client.fetchChartData(rolled);
+  const { dates, cols } = matrixFromPayload(payload);
+  if (cols.length < 3) throw new Error('chart returned fewer than 3 year lines');
+  const labels = rolled.selected;
 
-  // Wipe and rewrite all alive cycles' series (labels are per-year, no clash).
+  // Wipe and rewrite the series (labels are per-year, no clash).
   await db.query('DELETE FROM series_points WHERE strategy_id = $1', [strategy.id]);
   const rows = [];
-  for (const c of alive) {
-    c.cols.forEach((col, j) => {
-      col.forEach((v, i) => {
-        if (v != null) rows.push([strategy.id, c.labels[j], c.dates[i], v]);
-      });
+  cols.forEach((col, j) => {
+    col.forEach((v, i) => {
+      if (v != null) rows.push([strategy.id, labels[j], dates[i], v]);
     });
-  }
+  });
   await upsertPoints(db, rows);
 
+  // Classify by data recency against today. If line 0 ends near today, Scarr
+  // has already rolled the axis to the newest season → line 0 IS the current
+  // tradeable cycle (line 1 is just the completed prior year). If instead
+  // line 0 ends ~a season back (mapped forward-year spread) while line 1 ends
+  // near today, line 1 is the live current spread and line 0 the NEXT cycle.
+  const end0 = lastDataRow(cols[0]);
+  const end1 = lastDataRow(cols[1]);
+  const d0 = end0 >= 0 ? daysBetweenStr(dates[end0], todayDate) : Infinity;
+  const d1 = end1 >= 0 ? daysBetweenStr(dates[end1], todayDate) : Infinity;
+  const line0IsNext = d0 > 200 && d1 <= 45;
+
+  const plans = [];
+  if (line0IsNext) {
+    plans.push({ label: 'current', startCol: 1, realDayShift: 0 });
+    plans.push({
+      label: 'next', startCol: 0,
+      realDayShift: Math.max(0, daysBetweenStr(dates[end0], todayDate)),
+    });
+  } else {
+    plans.push({ label: 'current', startCol: 0, realDayShift: 0 });
+  }
+
   // Hybrid judgment: Claude (or the mechanical fallback) evaluates EVERY
-  // alive cycle with usable analogs — not only the ones that passed filters.
+  // analysable cycle — not only the ones that passed the mechanical filter.
   const cycles = [];
-  for (const c of alive) {
-    const analog = c.analog
-      || { years: [], analogCount: 0, agreementDirection: 0, agreementCount: 0, score: 0, entry: null };
-    const verdict = c.analog
-      ? await evaluateCycle({ strategy, cycle: { label: c.label, front: c.front, analog, trade: c.trade }, todayDate })
-      : null;
+  for (const p of plans) {
+    const line = analyseLine({
+      dates, cols, labels, startCol: p.startCol, analogYears,
+      window: cfg.window, realDayShift: p.realDayShift,
+    });
+    if (!line) {
+      cycles.push({
+        label: p.label, front: labels[p.startCol], labels: labels.slice(p.startCol),
+        analog: { years: [], analogCount: 0, agreementDirection: 0, agreementCount: 0, score: 0, entry: null },
+        trade: null, verdict: null,
+      });
+      continue;
+    }
+    const verdict = await evaluateCycle({
+      strategy,
+      cycle: { label: p.label, front: line.front, analog: line.analog, trade: line.trade },
+      todayDate,
+    });
     cycles.push({
-      label: c.label, anchor: c.anchor, front: c.front, labels: c.labels,
-      analog, trade: c.trade, verdict,
+      label: p.label, front: line.front, labels: line.labels,
+      analog: line.analog, trade: line.trade, verdict,
     });
   }
 
@@ -167,7 +197,7 @@ async function syncOneStrategy({ db, client, strategy, todayDate, analogYears })
     [strategy.id, todayDate, best.analog.agreementDirection || 0,
       Math.max(...cycles.map((c) => c.analog.score || 0)), flagged, flagged,
       JSON.stringify({ cycles }), best.verdict ? JSON.stringify(best.verdict) : null,
-      JSON.stringify({ todayDate, anchors: cycles.map((c) => c.anchor) })]);
+      JSON.stringify({ todayDate, anchor: anchors[0] })]);
   return {
     points: rows.length,
     setupScore: Math.max(...cycles.map((c) => c.analog.score || 0)),
@@ -228,5 +258,5 @@ async function importAllFromScarr({ db, client }) {
 
 module.exports = {
   runSync, importAllFromScarr, splitCurrentAndPrior, labelYear,
-  upsertPoints, getSetting, setSetting,
+  upsertPoints, getSetting, setSetting, analyseLine, matrixFromPayload,
 };

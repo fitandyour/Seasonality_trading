@@ -234,7 +234,12 @@ function alignedAnalog({ cols, labels, todayRow, closeRow, similarityThreshold =
 function identifyTrade(analog, { dates, todayRow, minAnalogs = 3, minScore = 35, buffer = 1.1 } = {}) {
   const dir = analog.agreementDirection;
   if (dir === 0 || analog.entry == null) return null;
-  if (analog.agreementCount < minAnalogs || analog.score < minScore) return null;
+  // A small-but-unanimous analog set with a strong score also qualifies
+  // (e.g. 2 of 2 agreeing at score 70 — common when similarity filters
+  // leave few usable years).
+  const unanimous = analog.analogCount >= 2
+    && analog.agreementCount === analog.analogCount && analog.score >= 50;
+  if ((analog.agreementCount < minAnalogs || analog.score < minScore) && !unanimous) return null;
   const agree = analog.years.filter((y) => y.similarity != null && y.nextMove != null
     && Math.sign(y.nextMove) === dir);
   if (!agree.length) return null;

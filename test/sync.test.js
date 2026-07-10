@@ -130,3 +130,48 @@ test('importAllFromScarr upserts every saved chart with its config', async () =>
   assert.equal(config.yearsBack, 5);
   assert.equal(config.window.openMonth, 'January');
 });
+
+// Next-cycle classification: line 0's data ends far earlier on the shared
+// axis than line 1's (a next-year spread mapped back one season), so line 1
+// is the live current spread and line 0 the next cycle.
+test('runSync classifies a next-year line and analyses both cycles', async () => {
+  const contracts = [[['FC2027H', 'FC2026H', 'FC2025H', 'FC2024H', 'FC2023H', 'FC2022H', 'FC2021H']]];
+  function payload() {
+    const values = [];
+    for (let d = 0; d < 400; d += 1) {
+      const dt = new Date(Date.UTC(2026, 0, 1 + d)); // axis from 2026-01-01
+      const ymd = Number(dt.toISOString().slice(0, 10).replace(/-/g, ''));
+      const row = [ymd];
+      row.push(d <= 60 ? 0.5 + d / 120 : null);   // col0: NEXT — ends ~300d before today
+      row.push(d <= 360 ? 1 + d / 130 : null);    // col1: CURRENT live (ends "today")
+      for (let k = 0; k < 5; k++) row.push(2 + d / 130); // 5 full priors
+      values.push(row);
+    }
+    return { unit: 'd', values };
+  }
+  const strategy = {
+    id: 9, save_name: 'NextTest', years_back: 5,
+    config: { window: { openMonth: 'January', openDate: 1, closeMonth: 'March', closeDate: 1 }, form: STORED_FORM },
+  };
+  const db = fakeDb([strategy]);
+  const client = fakeClient({
+    fetchContracts: async () => contracts,
+    fetchChartData: async () => payload(),
+  });
+  const { results } = await runSync({ db, client, todayDate: '2026-12-27' }); // = axis row 360
+  assert.equal(results[0].ok, true, JSON.stringify(results[0]));
+  const scoreInsert = db.log.find((q) => /INSERT INTO daily_scores/.test(q.text));
+  const analog = JSON.parse(scoreInsert.params[6]);
+  assert.equal(analog.cycles.length, 2);
+  const current = analog.cycles.find((c) => c.label === 'current');
+  const next = analog.cycles.find((c) => c.label === 'next');
+  assert.ok(current && next, 'both cycles present');
+  assert.equal(current.front, 'FC2026H', 'live line is the current front');
+  assert.equal(next.front, 'FC2027H', 'newest year is the next cycle');
+  assert.ok(current.verdict, 'current evaluated');
+  assert.ok(next.verdict, 'next evaluated');
+  // next-cycle exit dates are shifted forward to real calendar time
+  if (next.verdict.opportunity && next.verdict.exitDate) {
+    assert.ok(next.verdict.exitDate >= '2026-12-27', `exitDate ${next.verdict.exitDate} should be in real future`);
+  }
+});
