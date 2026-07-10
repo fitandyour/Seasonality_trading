@@ -50,10 +50,11 @@ router.use(requireAuth);
 router.get('/', async (req, res) => {
   const fills = await allFills();
   const multipliers = await loadMultipliers();
-  const { open, closed } = matchFills(fills, multipliers);
+  const { open, closed, status } = matchFills(fills, multipliers);
   const recentClosed = closed.slice(-15).reverse();
   res.render('trades', {
-    fills: fills.slice(-40).reverse(),
+    fills: fills.slice(-60).reverse(),
+    status,
     open,
     recentClosed,
     msg: req.query.msg || null,
@@ -103,6 +104,27 @@ router.post('/:id(\\d+)/date', async (req, res) => {
       [req.body.trade_date, req.params.id]);
   }
   res.redirect('/trades');
+});
+
+// Edit a fill's key fields — used to correct an OCR misread so a stuck pair
+// matches (e.g. align the contract text of a buy and sell).
+router.post('/:id(\\d+)/edit', async (req, res) => {
+  try {
+    const { normalizeFill } = require('../trades');
+    const f = normalizeFill({
+      side: req.body.side, qty: req.body.qty, symbol: req.body.symbol,
+      contract: req.body.contract, price: req.body.price,
+    });
+    const td = /^\d{4}-\d{2}-\d{2}$/.test(req.body.trade_date || '') ? req.body.trade_date : null;
+    await pool.query(
+      `UPDATE trades SET side=$1, qty=$2, symbol=$3, contract=$4, price=$5${td ? ', trade_date=$7' : ''}
+         WHERE id=$6`,
+      td ? [f.side, f.qty, f.symbol, f.contract, f.price, req.params.id, td]
+        : [f.side, f.qty, f.symbol, f.contract, f.price, req.params.id]);
+    res.redirect('/trades?msg=' + encodeURIComponent('Fill updated'));
+  } catch (err) {
+    res.redirect('/trades?err=' + encodeURIComponent(err.message));
+  }
 });
 
 router.post('/:id(\\d+)/delete', async (req, res) => {

@@ -82,8 +82,14 @@ router.get('/:id(\\d+)', async (req, res) => {
         .map((p) => ({ x: xOf.get(p.date), y: p.value }))
         .sort((a, b) => a.x - b.x);
       const lines = cycleLabels.slice(1).map((l) => ({ points: toPts(l), cls: 'prior' }));
-      lines.push({ points: toPts(cycleLabels[0]), cls: 'current' });
-      svg = seasonChartSvg({ lines });
+      const currentPts = toPts(cycleLabels[0]);
+      lines.push({ points: currentPts, cls: 'current' });
+      // Mark the front line's latest level + date for current-day context.
+      const markers = [];
+      const currentRows = byLabel[cycleLabels[0]].slice().sort((a, b) => (a.date < b.date ? -1 : 1));
+      const last = currentRows[currentRows.length - 1];
+      if (last) markers.push({ x: xOf.get(last.date), y: last.value, text: `${Number(last.value).toFixed(2)} · ${last.date.slice(5)}` });
+      svg = seasonChartSvg({ lines, markers, yAxis: true });
     }
     return { ...c, svg };
   });

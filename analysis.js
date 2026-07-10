@@ -5,6 +5,10 @@
 // the design spec §2.
 
 const DEFAULT_MODEL = process.env.ANALYSIS_MODEL || 'claude-opus-4-8';
+// Per-cycle setup evaluation runs ~50-100x per sync, so it defaults to a
+// cheap model. Override with SETUP_MODEL (e.g. claude-sonnet-4-6 for sharper
+// reads at higher cost). The one-off vision/coach paths use DEFAULT_MODEL.
+const SETUP_MODEL = process.env.SETUP_MODEL || process.env.ANALYSIS_MODEL || 'claude-haiku-4-5';
 
 const VERDICT_SCHEMA = {
   type: 'object',
@@ -236,13 +240,14 @@ function fallbackSetup(analog, trade) {
 async function defaultSetupMessage({ system, user, model }) {
   const Anthropic = require('@anthropic-ai/sdk');
   const client = new Anthropic();
+  // Bounded judgment over a small table — no extended thinking, low effort.
+  // This is the high-volume path (one call per cycle per sync), so keep it cheap.
   const resp = await client.messages.create({
     model,
-    max_tokens: 1200,
-    thinking: { type: 'adaptive' },
+    max_tokens: 1000,
     system,
     messages: [{ role: 'user', content: user }],
-    output_config: { format: { type: 'json_schema', schema: SETUP_SCHEMA }, effort: 'medium' },
+    output_config: { format: { type: 'json_schema', schema: SETUP_SCHEMA }, effort: 'low' },
   });
   const textBlock = resp.content.find((b) => b.type === 'text');
   if (!textBlock) throw new Error('Claude returned no text block');
@@ -259,7 +264,7 @@ async function evaluateCycle({ strategy, cycle, todayDate, createMessage }) {
     const verdict = await createMessage({
       system: SETUP_SYSTEM,
       user: cyclePromptUser(strategy, cycle, todayDate),
-      model: DEFAULT_MODEL,
+      model: SETUP_MODEL,
     });
     return { ...verdict, source: 'claude' };
   } catch (err) {

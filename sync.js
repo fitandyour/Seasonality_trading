@@ -1,9 +1,20 @@
 const { rollForwardAt, feasibleAnchors } = require('./scarr');
 const { configFromForm, MONTH_NUM } = require('./scarrparse');
 const { alignedAnalog, identifyTrade, lastDataRow } = require('./scoring');
-const { evaluateCycle } = require('./analysis');
+const { evaluateCycle, fallbackSetup } = require('./analysis');
 
 const DEFAULT_ANALOG_YEARS = 5;
+
+// Spend a Claude call only where there is something to judge: a mechanical
+// candidate, or at least 2 usable analog years agreeing on a direction.
+// Empty / split cycles get a deterministic no-setup — this is what keeps a
+// full sync cheap.
+function worthEvaluating(line) {
+  if (!line || !line.analog) return false;
+  if (line.trade) return true;
+  const a = line.analog;
+  return a.agreementDirection !== 0 && a.agreementCount >= 2;
+}
 
 function pad2(n) { return String(n).padStart(2, '0'); }
 
@@ -171,11 +182,13 @@ async function syncOneStrategy({ db, client, strategy, todayDate, analogYears })
       });
       continue;
     }
-    const verdict = await evaluateCycle({
-      strategy,
-      cycle: { label: p.label, front: line.front, analog: line.analog, trade: line.trade },
-      todayDate,
-    });
+    const verdict = worthEvaluating(line)
+      ? await evaluateCycle({
+        strategy,
+        cycle: { label: p.label, front: line.front, analog: line.analog, trade: line.trade },
+        todayDate,
+      })
+      : fallbackSetup(line.analog, line.trade); // deterministic, no API cost
     cycles.push({
       label: p.label, front: line.front, labels: line.labels,
       analog: line.analog, trade: line.trade, verdict,

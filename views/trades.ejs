@@ -75,28 +75,38 @@
   <% } %>
 
   <div class="card">
-    <h2>Fill history <span class="muted" style="font-size:.85rem">last <%= fills.length %></span></h2>
+    <h2>All fills <span class="muted" style="font-size:.85rem">last <%= fills.length %></span></h2>
+    <p class="muted" style="font-size:.82rem">
+      <span class="badge off">OPEN</span> still on · <span style="text-decoration:line-through;opacity:.6">closed</span> matched into a round trip · <span style="opacity:.75">partial</span> partly matched.
+      Edit a row to fix a mis-read contract so a stuck pair nets off.
+    </p>
     <% if (!fills.length) { %><p class="muted">No fills recorded yet.</p><% } else { %>
+    <% for (const f of fills) { %>
+      <form id="e<%= f.id %>" method="post" action="/trades/<%= f.id %>/edit" style="display:none"></form>
+      <form id="d<%= f.id %>" method="post" action="/trades/<%= f.id %>/delete" style="display:none" onsubmit="return confirm('Delete this fill?')"></form>
+    <% } %>
     <table>
-      <tr><th>Date</th><th>Side</th><th>Qty</th><th>Contract</th><th>Level</th><th>Src</th><th></th></tr>
-      <% for (const f of fills) { %>
-      <tr>
+      <tr><th>Date</th><th>Side</th><th>Qty</th><th>Symbol</th><th>Contract</th><th>Level</th><th>State</th><th></th></tr>
+      <% for (const f of fills) { const st = status[f.id] || 'open';
+         const rowStyle = st === 'closed' ? 'text-decoration:line-through;opacity:.55' : (st === 'partial' ? 'opacity:.8' : ''); %>
+      <tr style="<%= rowStyle %>">
+        <td><input form="e<%= f.id %>" type="date" name="trade_date" value="<%= f.trade_date %>" style="padding:.15rem .3rem;font-size:.82rem;width:8.5rem"></td>
+        <td><select form="e<%= f.id %>" name="side" style="padding:.15rem;font-size:.82rem">
+          <option value="buy" <%= f.side === 'buy' ? 'selected' : '' %>>buy</option>
+          <option value="sell" <%= f.side === 'sell' ? 'selected' : '' %>>sell</option>
+        </select></td>
+        <td><input form="e<%= f.id %>" name="qty" type="number" min="1" value="<%= f.qty %>" style="width:3.2rem;padding:.15rem;font-size:.82rem"></td>
+        <td><input form="e<%= f.id %>" name="symbol" value="<%= f.symbol %>" style="width:3.5rem;padding:.15rem;font-size:.82rem"></td>
+        <td><input form="e<%= f.id %>" name="contract" value="<%= f.contract %>" style="width:14rem;padding:.15rem;font-size:.82rem"></td>
+        <td><input form="e<%= f.id %>" name="price" type="number" step="any" value="<%= f.price %>" style="width:5rem;padding:.15rem;font-size:.82rem"></td>
         <td>
-          <form method="post" action="/trades/<%= f.id %>/date" style="margin:0;display:flex;gap:.3rem">
-            <input type="date" name="trade_date" value="<%= f.trade_date %>" style="padding:.15rem .3rem;font-size:.85rem">
-            <button style="padding:.15rem .5rem;font-size:.8rem">✓</button>
-          </form>
+          <% if (st === 'closed') { %><span class="muted">closed</span>
+          <% } else if (st === 'partial') { %><span class="badge" style="background:var(--warn);color:#3a2c02">partial</span>
+          <% } else { %><span class="badge off">OPEN</span><% } %>
         </td>
-        <td><span class="badge <%= f.side === 'buy' ? 'flag' : 'fail' %>"><%= f.side %></span></td>
-        <td><%= f.qty %></td>
-        <td><%= f.symbol %> <%= f.contract %></td>
-        <td><%= f.price %></td>
-        <td class="muted"><%= f.source %></td>
-        <td>
-          <form method="post" action="/trades/<%= f.id %>/delete" style="margin:0"
-                onsubmit="return confirm('Delete this fill?')">
-            <button style="background:var(--bad);padding:.15rem .5rem;font-size:.8rem">✕</button>
-          </form>
+        <td style="white-space:nowrap">
+          <button form="e<%= f.id %>" style="padding:.15rem .45rem;font-size:.78rem" title="Save changes">save</button>
+          <button form="d<%= f.id %>" style="background:var(--bad);padding:.15rem .45rem;font-size:.78rem" title="Delete fill">✕</button>
         </td>
       </tr>
       <% } %>

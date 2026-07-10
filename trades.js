@@ -130,22 +130,34 @@ function daysBetween(a, b) {
 
 function contractKey(f) { return `${f.symbol} ${f.contract}`; }
 
+// Punctuation/spacing/case-insensitive key so fills of the SAME spread whose
+// contract text was transcribed slightly differently across screenshots
+// (e.g. "Aug26-Oct26" vs "Aug26 Oct26") still net against each other.
+function matchContract(symbol, contract) {
+  return `${symbol} ${contract}`.toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim();
+}
+
 // FIFO lot matching per contract. fills: [{id, trade_date:'YYYY-MM-DD', side,
-// qty, symbol, contract, price}] in any order. Returns open positions and
-// closed round trips (points always; dollars when the symbol has a multiplier).
+// qty, symbol, contract, price}] in any order. Returns open positions, closed
+// round trips (points always; dollars when the symbol has a multiplier), and
+// a per-fill status map: 'open' | 'closed' | 'partial'.
 function matchFills(fills, multipliers = DEFAULT_MULTIPLIERS) {
   const sorted = [...fills].sort((a, b) => (
     a.trade_date < b.trade_date ? -1 : a.trade_date > b.trade_date ? 1 : (a.id || 0) - (b.id || 0)
   ));
   const groups = new Map();
   for (const f of sorted) {
-    const k = contractKey(f);
+    const k = matchContract(f.symbol, f.contract);
     if (!groups.has(k)) groups.set(k, []);
     groups.get(k).push(f);
   }
 
+  const consumed = new Map(); // fill id -> qty matched off
+  const bump = (id, m) => { if (id != null) consumed.set(id, (consumed.get(id) || 0) + m); };
+
   const open = []; const closed = [];
-  for (const [key, list] of groups) {
+  for (const [, list] of groups) {
+    const key = `${list[0].symbol} ${list[0].contract}`;
     const queue = []; // open lots, oldest first
     for (const f of list) {
       let remaining = f.qty;
@@ -163,10 +175,11 @@ function matchFills(fills, multipliers = DEFAULT_MULTIPLIERS) {
           pnl: mult != null ? round2(points * mult * m) : null,
           holdDays: daysBetween(lot.date, f.trade_date),
         });
+        bump(f.id, m); bump(lot.fillId, m);
         lot.qty -= m; remaining -= m;
         if (lot.qty === 0) queue.shift();
       }
-      if (remaining > 0) queue.push({ side: f.side, qty: remaining, price: f.price, date: f.trade_date });
+      if (remaining > 0) queue.push({ side: f.side, qty: remaining, price: f.price, date: f.trade_date, fillId: f.id });
     }
     if (queue.length) {
       const qty = queue.reduce((s, l) => s + l.qty, 0);
@@ -178,12 +191,18 @@ function matchFills(fills, multipliers = DEFAULT_MULTIPLIERS) {
       });
     }
   }
+
+  const status = {};
+  for (const f of sorted) {
+    const c = consumed.get(f.id) || 0;
+    status[f.id] = c === 0 ? 'open' : c >= f.qty ? 'closed' : 'partial';
+  }
   open.sort((a, b) => (a.since < b.since ? -1 : 1));
   closed.sort((a, b) => (a.exitDate < b.exitDate ? -1 : 1));
-  return { open, closed };
+  return { open, closed, status };
 }
 
 module.exports = {
-  normalizeFill, matchFills, spreadType, parseFillsFromImage,
+  normalizeFill, matchFills, matchContract, spreadType, parseFillsFromImage,
   DEFAULT_MULTIPLIERS, FILLS_SCHEMA, VISION_PROMPT,
 };

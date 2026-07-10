@@ -22,3 +22,20 @@ test('seasonChartSvg survives empty lines', () => {
   assert.match(svg, /^<svg/);
   assert.doesNotMatch(svg, /NaN/);
 });
+
+test('seasonChartSvg renders a marker with its value label', () => {
+  const svg = seasonChartSvg({
+    lines: [{ points: [{ x: 0, y: 10 }, { x: 5, y: 12 }], cls: 'current' }],
+    markers: [{ x: 5, y: 12, text: '-0.53 · 07-09' }],
+    yAxis: true,
+  });
+  assert.match(svg, /<circle/);
+  assert.match(svg, /-0\.53 · 07-09/);
+  assert.match(svg, /12\.00/); // y-axis max label
+  assert.doesNotMatch(svg, /NaN/);
+});
+
+test('seasonChartSvg escapes marker text', () => {
+  const svg = seasonChartSvg({ lines: [{ points: [{ x: 0, y: 1 }], cls: 'current' }], markers: [{ x: 0, y: 1, text: '<b>' }] });
+  assert.match(svg, /&lt;b&gt;/);
+});

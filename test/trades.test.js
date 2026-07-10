@@ -116,3 +116,37 @@ test('parseFillsFromImage without key and without injected vision throws a clear
     if (saved !== undefined) process.env.ANTHROPIC_API_KEY = saved;
   }
 });
+
+const { matchContract } = require('../trades');
+
+test('matchContract canonicalizes spacing, dashes, slashes, case', () => {
+  assert.equal(
+    matchContract('GF', 'Aug26-Oct26 Calendar'),
+    matchContract('gf', ' Aug26 Oct26  calendar '));
+  assert.equal(
+    matchContract('GF', 'Aug26-Oct26 Calendar'),
+    matchContract('GF', 'Aug26/Oct26 Calendar'));
+  assert.notEqual(
+    matchContract('GF', 'Aug26-Oct26 Calendar'),
+    matchContract('GF', 'Sep26-Mar27 Calendar'));
+});
+
+test('matchFills matches a buy/sell pair that differ only in contract punctuation', () => {
+  const { open, closed } = matchFills([
+    { id: 1, trade_date: '2026-07-01', side: 'buy', qty: 1, symbol: 'GF', contract: 'Aug26-Oct26 Calendar', price: 6.5 },
+    { id: 2, trade_date: '2026-07-02', side: 'sell', qty: 1, symbol: 'GF', contract: 'Aug26 Oct26 Calendar', price: 7.5 },
+  ]);
+  assert.equal(open.length, 0, 'punctuation-only difference should still close');
+  assert.equal(closed.length, 1);
+});
+
+test('matchFills reports per-fill status: closed / open / partial', () => {
+  const { status } = matchFills([
+    { id: 1, trade_date: '2026-07-01', side: 'buy', qty: 2, symbol: 'GF', contract: 'Aug26-Oct26 Calendar', price: 6 },
+    { id: 2, trade_date: '2026-07-05', side: 'sell', qty: 1, symbol: 'GF', contract: 'Aug26-Oct26 Calendar', price: 7 },
+    { id: 3, trade_date: '2026-07-06', side: 'buy', qty: 1, symbol: 'HE', contract: 'Aug26-Oct26 Calendar', price: 5 },
+  ]);
+  assert.equal(status[1], 'partial'); // 1 of 2 matched
+  assert.equal(status[2], 'closed');  // fully matched
+  assert.equal(status[3], 'open');    // nothing to match against
+});
