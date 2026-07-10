@@ -149,4 +149,125 @@ async function analyzeStrategy({ strategy, analog, trade, createMessage }) {
   }
 }
 
-module.exports = { fallbackVerdict, buildPrompt, analyzeStrategy, VERDICT_SCHEMA, DEFAULT_MODEL };
+// ---- Per-cycle setup evaluation (hybrid: mechanical candidate + Claude judgment) ----
+
+const SETUP_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    opportunity: { type: 'boolean' },
+    side: { type: 'string', enum: ['long', 'short', 'none'] },
+    entry: { anyOf: [{ type: 'number' }, { type: 'null' }] },
+    stop: { anyOf: [{ type: 'number' }, { type: 'null' }] },
+    target: { anyOf: [{ type: 'number' }, { type: 'null' }] },
+    exitDate: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+    probability: { type: 'integer' },
+    confidence: { type: 'string', enum: ['low', 'medium', 'high'] },
+    headline: { type: 'string' },
+    rationale: { type: 'string' },
+    risk: { type: 'string' },
+  },
+  required: ['opportunity', 'side', 'entry', 'stop', 'target', 'exitDate',
+    'probability', 'confidence', 'headline', 'rationale', 'risk'],
+};
+
+const SETUP_SYSTEM = `You are a commodity futures spread seasonality analyst deciding whether ONE contract cycle of a saved spread strategy offers a tradeable setup today. You get: this cycle's front contracts, this year's current level, a table of how each of the last 5 years behaved at the same aligned point and what each did next through the seasonal window, aggregates, and (sometimes) a mechanically computed candidate trade.
+
+How to judge (standard seasonal-spread practice, MRCI-style):
+- An opportunity needs directional agreement among the usable analog years — prefer 3+ of 5 moving the same way next, weighted by how similar their path-so-far is to this year. 4+ of 5 is strong.
+- Entry quality: compare this year's level to where the agreeing years were at this point (the levelGap column). Entering cheaper than the analogs (for a long) improves the case; chasing far above them weakens it.
+- Risk must be defined: the stop belongs beyond the worst adverse excursion the agreeing years saw before their move worked. If the implied risk exceeds the likely reward, it is not an opportunity.
+- Thin data (few overlapping points, similarity null) means low confidence — flag an opportunity only if the level vs prior years is compelling on its own.
+- Every number you output MUST be derivable from the table or the candidate (levels the analog years actually reached). Never invent a price.
+- If the candidate trade looks right, adopt or refine it. If the analogs disagree or risk/reward is poor, set opportunity=false and say why in one line.
+- This is probabilistic analysis, not investment advice.`;
+
+function cyclePromptUser(strategy, cycle, todayDate) {
+  const w = strategy.config && strategy.config.window;
+  const window = w ? `${w.openMonth} ${w.openDate} → ${w.closeMonth} ${w.closeDate}` : 'unknown';
+  const a = cycle.analog;
+  const rows = a.years.map((y) => (
+    `  ${y.label}: similarity ${fmt(y.similarity)}, next move ${fmt(y.nextMove)} `
+    + `(best ${fmt(y.maxFavorable)}, worst ${fmt(y.maxAdverse)}), `
+    + `level then ${fmt(y.levelThen)} vs now ${fmt(a.entry)} (gap ${fmt(y.levelGap)})`
+  )).join('\n');
+  const t = cycle.trade;
+  const candidate = t
+    ? `Candidate trade: ${t.side} at ~${fmt(t.entry)}, target ${fmt(t.target)}, stop ${fmt(t.stop)}, ideal exit ${t.exitDate || '?'}, R:R ≈ ${t.rr}, ${t.agreeCount} years agree.`
+    : 'No mechanical candidate passed the filter.';
+  return `Strategy: ${strategy.save_name}
+Cycle: ${cycle.label} (front ${cycle.front}). Today: ${todayDate}. Seasonal window: ${window}.
+This year's level now: ${fmt(a.entry)}.
+
+Per-year analogs (most similar first):
+${rows || '  (no usable prior-year data)'}
+
+Aggregate: ${a.analogCount} usable analogs, ${a.agreementCount} agree ${a.agreementDirection > 0 ? 'up' : a.agreementDirection < 0 ? 'down' : '(split)'}, mean next move ${fmt(a.meanNextMove)}, opposite-side risk ${fmt(a.oppositeRisk)}.
+
+${candidate}
+
+Decide: is there a tradeable setup on this cycle?`;
+}
+
+// No API key / API failure: the mechanical candidate IS the decision.
+function fallbackSetup(analog, trade) {
+  if (!trade) {
+    return {
+      opportunity: false, side: 'none', entry: null, stop: null, target: null,
+      exitDate: null, probability: 0, confidence: 'low',
+      headline: 'No setup — analogs disagree or filters not met',
+      rationale: `${analog.agreementCount || 0} of ${analog.analogCount || 0} usable analog years agree; below the bar.`,
+      risk: '',
+      source: 'fallback',
+    };
+  }
+  const prob = Math.max(50, Math.min(100, Math.round(50 + analog.score / 2)));
+  return {
+    opportunity: true, side: trade.side, entry: trade.entry, stop: trade.stop,
+    target: trade.target, exitDate: trade.exitDate, probability: prob,
+    confidence: analog.score >= 60 ? 'high' : analog.score >= 45 ? 'medium' : 'low',
+    headline: `${trade.agreeCount} of ${analog.analogCount} analog years moved ${trade.side === 'long' ? 'up' : 'down'} from here`,
+    rationale: `Mean next move ${fmt(analog.meanNextMove)}; stop set beyond the analogs' worst drawdown (${fmt(analog.oppositeRisk)} opposite-side risk).`,
+    risk: `${(analog.analogCount || 0) - (trade.agreeCount || 0)} analog year(s) went the other way.`,
+    source: 'fallback',
+  };
+}
+
+async function defaultSetupMessage({ system, user, model }) {
+  const Anthropic = require('@anthropic-ai/sdk');
+  const client = new Anthropic();
+  const resp = await client.messages.create({
+    model,
+    max_tokens: 1200,
+    thinking: { type: 'adaptive' },
+    system,
+    messages: [{ role: 'user', content: user }],
+    output_config: { format: { type: 'json_schema', schema: SETUP_SCHEMA }, effort: 'medium' },
+  });
+  const textBlock = resp.content.find((b) => b.type === 'text');
+  if (!textBlock) throw new Error('Claude returned no text block');
+  return JSON.parse(textBlock.text);
+}
+
+// Evaluate one contract cycle. cycle = { label, front, analog, trade }.
+async function evaluateCycle({ strategy, cycle, todayDate, createMessage }) {
+  if (!createMessage) {
+    if (!process.env.ANTHROPIC_API_KEY) return fallbackSetup(cycle.analog, cycle.trade);
+    createMessage = defaultSetupMessage;
+  }
+  try {
+    const verdict = await createMessage({
+      system: SETUP_SYSTEM,
+      user: cyclePromptUser(strategy, cycle, todayDate),
+      model: DEFAULT_MODEL,
+    });
+    return { ...verdict, source: 'claude' };
+  } catch (err) {
+    return { ...fallbackSetup(cycle.analog, cycle.trade), error: err.message };
+  }
+}
+
+module.exports = {
+  fallbackVerdict, buildPrompt, analyzeStrategy, VERDICT_SCHEMA, DEFAULT_MODEL,
+  SETUP_SCHEMA, evaluateCycle, fallbackSetup, cyclePromptUser,
+};

@@ -93,3 +93,47 @@ test('analyzeStrategy falls back to deterministic verdict without an API key', a
     if (saved !== undefined) process.env.ANTHROPIC_API_KEY = saved;
   }
 });
+
+const { evaluateCycle, fallbackSetup } = require('../analysis');
+
+test('fallbackSetup converts a candidate trade into an opportunity verdict', () => {
+  const analog = { agreementCount: 3, analogCount: 4, score: 55, meanNextMove: 1.8, oppositeRisk: 0.9 };
+  const trade = { side: 'long', entry: 1.0, target: 2.8, stop: 0.4, exitDate: '2027-02-10', rr: 3, agreeCount: 3 };
+  const v = fallbackSetup(analog, trade);
+  assert.equal(v.opportunity, true);
+  assert.equal(v.side, 'long');
+  assert.equal(v.entry, 1.0);
+  assert.ok(v.probability >= 50);
+});
+
+test('fallbackSetup without a candidate is a clear no', () => {
+  const v = fallbackSetup({ agreementCount: 2, analogCount: 5, score: 20 }, null);
+  assert.equal(v.opportunity, false);
+  assert.equal(v.side, 'none');
+});
+
+test('evaluateCycle uses injected createMessage and tags source claude', async () => {
+  const cycle = {
+    label: 'current', front: 'LH2026Q/LH2026V',
+    analog: { entry: 14.2, years: [], analogCount: 4, agreementCount: 3, agreementDirection: 1, meanNextMove: 2, oppositeRisk: 1, score: 50 },
+    trade: null,
+  };
+  const fake = { opportunity: true, side: 'long', entry: 14.2, stop: 11.0, target: 17.7, exitDate: '2026-08-01', probability: 62, confidence: 'medium', headline: 'h', rationale: 'r', risk: 'k' };
+  let seen = null;
+  const v = await evaluateCycle({ strategy: STRATEGY, cycle, todayDate: '2026-07-10', createMessage: async (a) => { seen = a; return fake; } });
+  assert.equal(v.source, 'claude');
+  assert.equal(v.opportunity, true);
+  assert.match(seen.user, /LH2026Q/);
+  assert.match(seen.user, /current/);
+});
+
+test('evaluateCycle falls back when the API call fails', async () => {
+  const cycle = {
+    label: 'next', front: 'LH2027Q/LH2027V',
+    analog: { entry: 15, years: [], analogCount: 0, agreementCount: 0, agreementDirection: 0, score: 0 },
+    trade: null,
+  };
+  const v = await evaluateCycle({ strategy: STRATEGY, cycle, todayDate: '2026-07-10', createMessage: async () => { throw new Error('down'); } });
+  assert.equal(v.opportunity, false);
+  assert.match(v.error, /down/);
+});

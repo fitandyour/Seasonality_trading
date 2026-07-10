@@ -15,32 +15,30 @@
 
   <div class="card">
     <h2>Trade setups <span class="muted" style="font-size:.85rem">
-      <%= setups.length %> found · <%= scanned %> strategies scanned</span></h2>
+      <%= setups.length %> found · <%= scanned %> strategies scanned (current + next cycle)</span></h2>
     <p class="muted" style="font-size:.83rem">Where this year's spread is tracking prior years that then made a repeatable move. Probabilistic analysis, not trade advice — always your own call.</p>
     <% if (!setups.length) { %>
       <p class="muted">No setups today<% if (scanned === 0) { %> — import strategies and run a sync from <a href="/admin">Admin</a><% } %>.</p>
     <% } %>
   </div>
 
-  <% for (const r of setups) { const t = r.analog.trade; const v = r.verdict || {}; %>
+  <% for (const s of setups) { const c = s.cycle; const v = c.verdict; %>
   <div class="card">
     <div class="setup">
-      <h3 style="margin:0"><a href="/strategies/<%= r.id %>"><%= r.save_name %></a></h3>
-      <span class="badge <%= t.side === 'long' ? 'flag' : 'fail' %>"><%= t.side === 'long' ? '▲ LONG' : '▼ SHORT' %> the spread</span>
-      <span class="muted">score <%= Math.round(r.setup_score || 0) %> · prob <%= v.probability != null ? v.probability + '%' : '—' %>
-        · <%= t.agreeCount %> analog years agree · R:R ≈ <%= t.rr %></span>
+      <h3 style="margin:0"><a href="/strategies/<%= s.id %>"><%= s.save_name %></a></h3>
+      <span class="badge <%= v.side === 'long' ? 'flag' : 'fail' %>"><%= v.side === 'long' ? '▲ LONG' : '▼ SHORT' %></span>
+      <span class="badge off"><%= c.label %> · <%= c.front %></span>
+      <span class="muted">prob <%= v.probability %>% · confidence <%= v.confidence %></span>
     </div>
     <div class="setup" style="margin-top:.7rem">
-      <span class="lvl">entry <b><%= t.entry %></b></span>
-      <span class="lvl">target <b class="<%= t.side === 'long' ? 'side-long' : 'side-short' %>"><%= t.target %></b></span>
-      <span class="lvl">stop <b class="<%= t.side === 'long' ? 'side-short' : 'side-long' %>"><%= t.stop %></b></span>
-      <span class="lvl">ideal exit <b><%= t.exitDate || '—' %></b></span>
+      <span class="lvl">entry <b><%= v.entry ?? '—' %></b></span>
+      <span class="lvl">target <b class="<%= v.side === 'long' ? 'side-long' : 'side-short' %>"><%= v.target ?? '—' %></b></span>
+      <span class="lvl">stop <b class="<%= v.side === 'long' ? 'side-short' : 'side-long' %>"><%= v.stop ?? '—' %></b></span>
+      <span class="lvl">ideal exit <b><%= v.exitDate || '—' %></b></span>
     </div>
-    <% if (v.headline) { %>
-      <p style="margin:.7rem 0 0"><strong><%= v.headline %></strong> — <%= v.rationale %></p>
-      <p class="muted" style="font-size:.82rem;margin:.3rem 0 0">
-        Risk: <%= v.risk %><% if (v.source === 'fallback') { %> · <span class="badge off">computed (no AI key)</span><% } %></p>
-    <% } %>
+    <p style="margin:.7rem 0 0"><strong><%= v.headline %></strong> — <%= v.rationale %></p>
+    <p class="muted" style="font-size:.82rem;margin:.3rem 0 0">
+      Risk: <%= v.risk %><% if (v.source === 'fallback') { %> · <span class="badge off">computed (no AI key)</span><% } %></p>
   </div>
   <% } %>
 </main></body></html>

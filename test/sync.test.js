@@ -66,7 +66,7 @@ function fakeClient(overrides = {}) {
   };
 }
 
-test('runSync analog-matches the aligned axis, identifies a trade, stores verdict', async () => {
+test('runSync analyses alive cycles, evaluates each, stores opportunities', async () => {
   const strategy = {
     id: 1, save_name: 'Test_HJK', years_back: 5,
     config: { window: { openMonth: 'January', openDate: 1, closeMonth: 'February', closeDate: 1 }, form: STORED_FORM },
@@ -76,19 +76,23 @@ test('runSync analog-matches the aligned axis, identifies a trade, stores verdic
   assert.equal(syncRunId, 7);
   assert.equal(results[0].ok, true, JSON.stringify(results[0]));
   assert.ok(results[0].points > 0);
-  assert.equal(results[0].trade, true, 'a trade was identified');
+  assert.ok(results[0].trade >= 1, 'at least one opportunity identified');
   assert.ok(db.log.some((q) => /DELETE FROM series_points/.test(q.text)));
   assert.ok(db.log.some((q) => /INSERT INTO series_points/.test(q.text)));
 
   const scoreInsert = db.log.find((q) => /INSERT INTO daily_scores/.test(q.text));
   assert.ok(scoreInsert);
   const analog = JSON.parse(scoreInsert.params[6]);
-  const verdict = JSON.parse(scoreInsert.params[7]);
-  assert.equal(analog.agreementDirection, 1, 'analogs agree up');
-  assert.ok(analog.trade && analog.trade.side === 'long', 'long trade stored');
-  assert.ok(analog.trade.entry != null && analog.trade.target != null && analog.trade.stop != null);
-  assert.equal(verdict.direction, 'long');
-  assert.equal(verdict.source, 'fallback');
+  assert.ok(Array.isArray(analog.cycles) && analog.cycles.length >= 1, 'cycles stored');
+  const first = analog.cycles[0];
+  assert.equal(first.label, 'current');
+  assert.ok(first.front, 'front contracts recorded');
+  assert.equal(first.analog.agreementDirection, 1, 'analogs agree up');
+  assert.ok(first.verdict, 'every analysed cycle gets a verdict');
+  assert.equal(first.verdict.opportunity, true);
+  assert.equal(first.verdict.side, 'long');
+  assert.ok(first.verdict.entry != null && first.verdict.target != null && first.verdict.stop != null);
+  assert.equal(first.verdict.source, 'fallback');
   assert.ok(db.log.some((q) => /UPDATE sync_runs/.test(q.text)));
 });
 

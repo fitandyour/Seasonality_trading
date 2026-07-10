@@ -82,7 +82,7 @@ test('identifyTrade returns null when too few analogs agree', () => {
 
 test('identifyTrade returns null when score is below threshold', () => {
   const analog = {
-    entry: 2.0, agreementDirection: 1, agreementCount: 4, score: 40,
+    entry: 2.0, agreementDirection: 1, agreementCount: 4, score: 20,
     years: [{ label: 'U1', similarity: 0.9, nextMove: 1, maxFavorable: 1, maxAdverse: -1, favOffset: 5, advOffset: 1 }],
   };
   assert.equal(identifyTrade(analog, { todayRow: 20 }), null);

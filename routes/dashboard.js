@@ -26,8 +26,17 @@ router.get('/', async (req, res) => {
        JOIN strategies s ON s.id = d.strategy_id
       WHERE d.score_date = (SELECT max(score_date) FROM daily_scores)
       ORDER BY d.setup_score DESC`);
-  // Only surface strategies where a tradeable setup was identified.
-  const setups = all.filter((r) => r.analog && r.analog.trade);
+  // One card per cycle where a tradeable setup was identified.
+  const setups = [];
+  for (const r of all) {
+    const cycles = (r.analog && r.analog.cycles) || [];
+    for (const c of cycles) {
+      if (c.verdict && c.verdict.opportunity) {
+        setups.push({ id: r.id, save_name: r.save_name, cycle: c });
+      }
+    }
+  }
+  setups.sort((a, b) => (b.cycle.verdict.probability || 0) - (a.cycle.verdict.probability || 0));
   const { rows: [lastRun] } = await pool.query(
     'SELECT * FROM sync_runs ORDER BY started_at DESC LIMIT 1');
   res.render('dashboard', { setups, scanned: all.length, lastRun });

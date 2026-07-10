@@ -161,7 +161,9 @@ function lastDataRow(col) {
   return -1;
 }
 
-function alignedAnalog({ cols, labels, todayRow, closeRow, similarityThreshold = 0.85 }) {
+// Real spread paths rarely correlate above ~0.8 year-to-year; 0.5 marks a
+// usable analog (direction of the read is decided by agreement, not one year).
+function alignedAnalog({ cols, labels, todayRow, closeRow, similarityThreshold = 0.5 }) {
   const current = cols[0];
   const entry = current[todayRow] != null ? current[todayRow] : null;
   const years = [];
@@ -229,7 +231,7 @@ function alignedAnalog({ cols, labels, todayRow, closeRow, similarityThreshold =
 // Turn an analog result into a concrete trade, or null if none is worth
 // flagging. Entry = this year's current level; target/timing from the agreeing
 // analogs' profit extreme; stop from their worst adverse excursion.
-function identifyTrade(analog, { dates, todayRow, minAnalogs = 3, minScore = 55, buffer = 1.1 } = {}) {
+function identifyTrade(analog, { dates, todayRow, minAnalogs = 3, minScore = 35, buffer = 1.1 } = {}) {
   const dir = analog.agreementDirection;
   if (dir === 0 || analog.entry == null) return null;
   if (analog.agreementCount < minAnalogs || analog.score < minScore) return null;

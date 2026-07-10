@@ -3,7 +3,6 @@ const { pool } = require('../db');
 const { requireAuth } = require('../auth');
 const { parseSavedChartUrl } = require('../scarrparse');
 const { seasonChartSvg } = require('../chartsvg');
-const { splitCurrentAndPrior } = require('../sync');
 
 function strategyRecordFromUrl(url) {
   const config = parseSavedChartUrl(url);
@@ -20,13 +19,19 @@ router.use(requireAuth);
 
 router.get('/', async (req, res) => {
   const { rows } = await pool.query(
-    `SELECT s.*, d.setup_score, d.flagged, d.score_date
+    `SELECT s.*, d.setup_score, d.flagged, d.score_date, d.analog
        FROM strategies s
        LEFT JOIN LATERAL (
-         SELECT setup_score, flagged, score_date FROM daily_scores
+         SELECT setup_score, flagged, score_date, analog FROM daily_scores
           WHERE strategy_id = s.id ORDER BY score_date DESC LIMIT 1
        ) d ON true
       ORDER BY s.save_name`);
+  for (const r of rows) {
+    r.suggestion = null;
+    const cycles = (r.analog && r.analog.cycles) || [];
+    const opp = cycles.find((c) => c.verdict && c.verdict.opportunity);
+    if (opp) r.suggestion = { ...opp.verdict, label: opp.label, front: opp.front };
+  }
   res.render('strategies', { strategies: rows });
 });
 
@@ -64,24 +69,25 @@ router.get('/:id(\\d+)', async (req, res) => {
 
   const byLabel = {};
   for (const p of points) (byLabel[p.line_label] ||= []).push({ date: p.date, value: p.value });
-  let svg = null;
-  const labels = Object.keys(byLabel);
-  if (labels.length >= 2) {
-    // Plot on Scarr's shared date axis: x = position in the sorted union of
-    // all dates. This mirrors Scarr exactly and avoids the season-index
-    // reprojection that scrambled multi-year spreads.
-    const allDates = [...new Set(points.map((p) => p.date))].sort();
-    const xOf = new Map(allDates.map((d, i) => [d, i]));
-    const toPts = (label) => byLabel[label]
-      .map((p) => ({ x: xOf.get(p.date), y: p.value }))
-      .sort((a, b) => a.x - b.x);
-    const { current, prior } = splitCurrentAndPrior(labels, 5);
-    // Each prior year as its own line (year-by-year, not an average) + this year highlighted.
-    const lines = prior.map((l) => ({ points: toPts(l), cls: 'prior' }));
-    lines.push({ points: toPts(current), cls: 'current' });
-    svg = seasonChartSvg({ lines });
-  }
-  res.render('strategy', { strategy, score, svg });
+
+  // One section per analysed cycle (current / next), each with its own chart
+  // on Scarr's shared date axis — no reprojection.
+  const cycles = ((score && score.analog && score.analog.cycles) || []).map((c) => {
+    const cycleLabels = (c.labels || []).filter((l) => byLabel[l]);
+    let svg = null;
+    if (cycleLabels.length >= 2) {
+      const cycleDates = [...new Set(cycleLabels.flatMap((l) => byLabel[l].map((p) => p.date)))].sort();
+      const xOf = new Map(cycleDates.map((d, i) => [d, i]));
+      const toPts = (label) => byLabel[label]
+        .map((p) => ({ x: xOf.get(p.date), y: p.value }))
+        .sort((a, b) => a.x - b.x);
+      const lines = cycleLabels.slice(1).map((l) => ({ points: toPts(l), cls: 'prior' }));
+      lines.push({ points: toPts(cycleLabels[0]), cls: 'current' });
+      svg = seasonChartSvg({ lines });
+    }
+    return { ...c, svg };
+  });
+  res.render('strategy', { strategy, score, cycles });
 });
 
 router.post('/:id/toggle', async (req, res) => {
