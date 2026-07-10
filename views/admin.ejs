@@ -9,6 +9,14 @@
       <button>Save</button>
     </form>
   </div>
+  <div class="card">
+    <h3>Point multipliers ($ per 1.00 point, per symbol)</h3>
+    <p class="muted" style="font-size:.83rem">Used to turn spread points into dollars in the trade journal. JSON — edit and save.</p>
+    <form method="post" action="/admin/multipliers" class="stack" style="max-width:520px">
+      <textarea name="multipliers" rows="4" style="font-family:monospace"><%= JSON.stringify(multipliers) %></textarea>
+      <button>Save multipliers</button>
+    </form>
+  </div>
   <div class="card"><h3>Sync history</h3><table>
     <tr><th>Started</th><th>Status</th><th>Detail</th></tr>
     <% for (const r of runs) { %>

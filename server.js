@@ -24,6 +24,7 @@ app.use(session({
 }));
 registerAuthRoutes(app);
 app.use('/strategies', require('./routes/strategies').router);
+app.use('/trades', require('./routes/trades').router);
 const dashboard = require('./routes/dashboard');
 app.use('/', dashboard.router);
 

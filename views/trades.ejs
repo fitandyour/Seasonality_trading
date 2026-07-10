@@ -1,0 +1,106 @@
+<%- include('_head') %><%- include('_nav') %>
+<main>
+  <% if (msg) { %><div class="card" style="border-left:4px solid var(--good)"><%= msg %></div><% } %>
+  <% if (err) { %><div class="card" style="border-left:4px solid var(--bad)"><%= err %></div><% } %>
+
+  <div class="card">
+    <h2>Add fills</h2>
+    <% if (visionAvailable) { %>
+    <form method="post" action="/trades/upload" enctype="multipart/form-data" class="stack" style="max-width:520px">
+      <label class="muted">TT order-book screenshot (filled orders are read automatically)</label>
+      <input type="file" name="screenshot" accept="image/*" required>
+      <label class="muted">Fill date (screenshots carry no date)</label>
+      <input type="date" name="trade_date" value="<%= today %>" required>
+      <button>Upload & parse</button>
+    </form>
+    <% } else { %>
+    <p class="muted">Screenshot parsing needs <code>ANTHROPIC_API_KEY</code> in Railway — until then, add trades manually below.</p>
+    <% } %>
+    <details style="margin-top:.8rem">
+      <summary class="muted">Add a trade manually</summary>
+      <form method="post" action="/trades/add" class="stack" style="max-width:520px;margin-top:.6rem">
+        <div style="display:flex;gap:.5rem">
+          <select name="side"><option value="buy">Buy</option><option value="sell">Sell</option></select>
+          <input name="qty" type="number" min="1" value="1" style="width:5rem" required>
+          <input name="symbol" placeholder="GF" style="width:5rem" required>
+        </div>
+        <input name="contract" placeholder="Aug26-Oct26 Calendar" required>
+        <div style="display:flex;gap:.5rem">
+          <input name="price" type="number" step="any" placeholder="Price" required>
+          <input name="account" placeholder="Account (optional)">
+          <input name="trade_date" type="date" value="<%= today %>">
+        </div>
+        <button>Add trade</button>
+      </form>
+    </details>
+  </div>
+
+  <div class="card">
+    <h2>Open positions <span class="muted" style="font-size:.85rem"><%= open.length %></span></h2>
+    <% if (!open.length) { %><p class="muted">Flat — no open positions.</p><% } else { %>
+    <table>
+      <tr><th>Since</th><th>Position</th><th>Qty</th><th>Avg price</th><th>Type</th></tr>
+      <% for (const p of open) { %>
+      <tr>
+        <td><%= p.since %></td>
+        <td><span class="badge <%= p.side === 'long' ? 'flag' : 'fail' %>"><%= p.side.toUpperCase() %></span> <%= p.key %></td>
+        <td><%= p.qty %></td>
+        <td><%= p.avgPrice %></td>
+        <td class="muted"><%= p.type %></td>
+      </tr>
+      <% } %>
+    </table>
+    <% } %>
+    <p style="margin-top:.6rem"><a href="/trades/report">→ Monthly report</a></p>
+  </div>
+
+  <% if (recentClosed.length) { %>
+  <div class="card">
+    <h2>Recently closed</h2>
+    <table>
+      <tr><th>Exit</th><th>Trade</th><th>Qty</th><th>Entry→Exit</th><th>Points</th><th>P&L</th><th>Held</th></tr>
+      <% for (const t of recentClosed) { %>
+      <tr>
+        <td><%= t.exitDate %></td>
+        <td><%= t.side %> <%= t.key %></td>
+        <td><%= t.qty %></td>
+        <td><%= t.entryPrice %> → <%= t.exitPrice %></td>
+        <td style="color:<%= t.points > 0 ? 'var(--good)' : (t.points < 0 ? 'var(--bad)' : 'inherit') %>"><%= t.points %></td>
+        <td style="color:<%= (t.pnl||0) > 0 ? 'var(--good)' : ((t.pnl||0) < 0 ? 'var(--bad)' : 'inherit') %>"><%= t.pnl == null ? '—' : '$' + t.pnl %></td>
+        <td class="muted"><%= t.holdDays %>d</td>
+      </tr>
+      <% } %>
+    </table>
+  </div>
+  <% } %>
+
+  <div class="card">
+    <h2>Fill history <span class="muted" style="font-size:.85rem">last <%= fills.length %></span></h2>
+    <% if (!fills.length) { %><p class="muted">No fills recorded yet.</p><% } else { %>
+    <table>
+      <tr><th>Date</th><th>Side</th><th>Qty</th><th>Contract</th><th>Price</th><th>Src</th><th></th></tr>
+      <% for (const f of fills) { %>
+      <tr>
+        <td>
+          <form method="post" action="/trades/<%= f.id %>/date" style="margin:0;display:flex;gap:.3rem">
+            <input type="date" name="trade_date" value="<%= f.trade_date %>" style="padding:.15rem .3rem;font-size:.85rem">
+            <button style="padding:.15rem .5rem;font-size:.8rem">✓</button>
+          </form>
+        </td>
+        <td><span class="badge <%= f.side === 'buy' ? 'flag' : 'fail' %>"><%= f.side %></span></td>
+        <td><%= f.qty %></td>
+        <td><%= f.symbol %> <%= f.contract %></td>
+        <td><%= f.price %></td>
+        <td class="muted"><%= f.source %></td>
+        <td>
+          <form method="post" action="/trades/<%= f.id %>/delete" style="margin:0"
+                onsubmit="return confirm('Delete this fill?')">
+            <button style="background:var(--bad);padding:.15rem .5rem;font-size:.8rem">✕</button>
+          </form>
+        </td>
+      </tr>
+      <% } %>
+    </table>
+    <% } %>
+  </div>
+</main></body></html>

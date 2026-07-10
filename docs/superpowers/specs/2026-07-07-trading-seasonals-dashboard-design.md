@@ -148,6 +148,29 @@ brief: supply/demand headlines, upcoming USDA/report dates, weather,
 and spread-relevant notes. Shown on the dashboard and fed into setup
 verdicts.
 
+## 4b. Trade journal module (added 2026-07-10)
+
+Henk executes on Trading Technologies (trade.tt) and will paste order-book
+screenshots showing filled orders (B/S, qty, exchange, contract like
+"GF Aug26-Oct26 Calendar", avg price, account, TIF, type).
+
+- **Ingestion:** upload/paste a TT screenshot on the Trades page; Claude
+  vision extracts the filled rows (structured output). Trade date defaults
+  to upload day (screenshots carry no date) and is editable. Duplicate
+  fills (same date/side/qty/contract/price/account) are skipped. Manual
+  entry works without an API key.
+- **Positions:** FIFO lot matching per contract gives open positions
+  (net qty, avg price, since-date) and closed round trips (entry/exit,
+  points, dollars via per-symbol point multipliers — editable defaults,
+  e.g. GF $500/pt, LE/HE $400/pt, grains $50/pt).
+- **Monthly report** (research-based: Edgewonk/JournalPlus frameworks):
+  net P&L, win rate, profit factor, expectancy per trade, payoff ratio,
+  largest win/loss, max drawdown of realized P&L, avg hold days; broken
+  down per commodity, per structure (calendar/butterfly/other), and
+  long vs short; open positions at month end; plus a Claude "coach"
+  narrative (strengths, leaks, concrete improvements) when the API key
+  is set. Viewed on demand per month on the Report page.
+
 ## 5. Dashboard
 
 - **Home (post-login):** today's flagged setups ranked by Setup Score;

@@ -1,0 +1,107 @@
+<%- include('_head') %><%- include('_nav') %>
+<style>
+  .stats { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:.7rem; }
+  .stat { background:#0b1220; border:1px solid #334155; border-radius:8px; padding:.6rem .8rem; }
+  .stat b { display:block; font-size:1.25rem; margin-top:.15rem; }
+  .pos { color:var(--good); } .neg { color:var(--bad); }
+</style>
+<main>
+  <div class="card">
+    <h2>Monthly report — <%= ym %></h2>
+    <form method="get" style="display:inline">
+      <select onchange="location='/trades/report/'+this.value">
+        <% for (const m of months) { %>
+        <option value="<%= m %>" <%= m === ym ? 'selected' : '' %>><%= m %></option>
+        <% } %>
+      </select>
+    </form>
+    <% if (!report.trades) { %>
+      <p class="muted" style="margin-top:.8rem">No closed trades in <%= ym %>. Positions closed this month appear here automatically.</p>
+    <% } %>
+  </div>
+
+  <% function cls(n) { return n > 0 ? 'pos' : (n < 0 ? 'neg' : ''); } %>
+  <% if (report.trades) { %>
+  <div class="card">
+    <div class="stats">
+      <div class="stat">Net P&L <b class="<%= cls(report.netPnl) %>">$<%= report.netPnl %></b></div>
+      <div class="stat">Closed trades <b><%= report.trades %></b></div>
+      <div class="stat">Win rate <b><%= report.winRate %>%</b></div>
+      <div class="stat">Profit factor <b><%= report.profitFactor === null ? '—' : report.profitFactor %></b></div>
+      <div class="stat">Expectancy / trade <b class="<%= cls(report.expectancy) %>">$<%= report.expectancy %></b></div>
+      <div class="stat">Payoff (avgW/avgL) <b><%= report.payoff ?? '—' %></b></div>
+      <div class="stat">Avg win <b class="pos">$<%= report.avgWin ?? '—' %></b></div>
+      <div class="stat">Avg loss <b class="neg">$<%= report.avgLoss ?? '—' %></b></div>
+      <div class="stat">Largest win <b class="pos">$<%= report.largestWin ?? '—' %></b></div>
+      <div class="stat">Largest loss <b class="neg">$<%= report.largestLoss ?? '—' %></b></div>
+      <div class="stat">Max drawdown <b class="neg">$<%= report.maxDrawdown %></b></div>
+      <div class="stat">Avg hold <b><%= report.avgHoldDays %>d</b></div>
+    </div>
+    <p class="muted" style="font-size:.8rem;margin-top:.6rem">Guides: profit factor &gt;1.5 good, &gt;2 excellent · positive expectancy = real edge · win rate only matters together with payoff.</p>
+  </div>
+
+  <% if (coach) { %>
+  <div class="card">
+    <h3>Coach's review</h3>
+    <p><%= coach.summary %></p>
+    <p><strong>What worked:</strong></p>
+    <ul><% for (const s of coach.strengths) { %><li><%= s %></li><% } %></ul>
+    <p><strong>What leaked:</strong></p>
+    <ul><% for (const w of coach.weaknesses) { %><li><%= w %></li><% } %></ul>
+    <p><strong>Do next month:</strong></p>
+    <ul><% for (const a of coach.actions) { %><li><%= a %></li><% } %></ul>
+  </div>
+  <% } %>
+
+  <% const sections = [['By market', report.bySymbol], ['By structure', report.byType], ['By side', report.bySide]]; %>
+  <% for (const [title, rows] of sections) { %>
+  <div class="card">
+    <h3><%= title %></h3>
+    <table>
+      <tr><th></th><th>Trades</th><th>W/L</th><th>Win rate</th><th>Net P&L</th><th>Expectancy</th><th>Avg hold</th></tr>
+      <% for (const b of rows) { %>
+      <tr>
+        <td><%= b.key %></td>
+        <td><%= b.trades %></td>
+        <td><%= b.wins %>/<%= b.losses %></td>
+        <td><%= b.winRate %>%</td>
+        <td class="<%= cls(b.netPnl) %>">$<%= b.netPnl %></td>
+        <td class="<%= cls(b.expectancy) %>">$<%= b.expectancy %></td>
+        <td class="muted"><%= b.avgHoldDays %>d</td>
+      </tr>
+      <% } %>
+    </table>
+  </div>
+  <% } %>
+
+  <div class="card">
+    <h3>Closed trades in <%= ym %></h3>
+    <table>
+      <tr><th>Exit</th><th>Trade</th><th>Qty</th><th>Entry→Exit</th><th>Points</th><th>P&L</th><th>Held</th></tr>
+      <% for (const t of report.closedTrades) { %>
+      <tr>
+        <td><%= t.exitDate %></td>
+        <td><%= t.side %> <%= t.symbol %> <%= t.contract %></td>
+        <td><%= t.qty %></td>
+        <td><%= t.entryPrice %> → <%= t.exitPrice %></td>
+        <td class="<%= cls(t.points) %>"><%= t.points %></td>
+        <td class="<%= cls(t.pnl || 0) %>"><%= t.pnl == null ? '—' : '$' + t.pnl %></td>
+        <td class="muted"><%= t.holdDays %>d</td>
+      </tr>
+      <% } %>
+    </table>
+  </div>
+  <% } %>
+
+  <div class="card">
+    <h3>Open positions<%= report.trades ? ' at month end' : '' %></h3>
+    <% if (!report.openAtEnd.length) { %><p class="muted">Flat.</p><% } else { %>
+    <table>
+      <tr><th>Since</th><th>Position</th><th>Qty</th><th>Avg price</th></tr>
+      <% for (const p of report.openAtEnd) { %>
+      <tr><td><%= p.since %></td><td><%= p.side %> <%= p.key %></td><td><%= p.qty %></td><td><%= p.avgPrice %></td></tr>
+      <% } %>
+    </table>
+    <% } %>
+  </div>
+</main></body></html>

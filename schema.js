@@ -52,6 +52,22 @@ const MIGRATIONS = [
   // Analog-matching pivot (2026-07-08): per-year features + Claude verdict.
   `ALTER TABLE daily_scores ADD COLUMN IF NOT EXISTS analog JSONB`,
   `ALTER TABLE daily_scores ADD COLUMN IF NOT EXISTS verdict JSONB`,
+  // Trade journal (2026-07-10): fills ingested from TT screenshots or manual.
+  `CREATE TABLE IF NOT EXISTS trades (
+     id SERIAL PRIMARY KEY,
+     trade_date DATE NOT NULL,
+     side TEXT NOT NULL CHECK (side IN ('buy','sell')),
+     qty INT NOT NULL CHECK (qty > 0),
+     exchange TEXT,
+     symbol TEXT NOT NULL,
+     contract TEXT NOT NULL,
+     price DOUBLE PRECISION NOT NULL,
+     account TEXT,
+     tif TEXT,
+     order_type TEXT,
+     source TEXT NOT NULL DEFAULT 'manual',
+     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+   )`,
 ];
 
 async function migrate() {

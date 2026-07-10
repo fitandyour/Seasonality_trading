@@ -37,7 +37,25 @@ router.get('/admin', async (req, res) => {
   const { rows: runs } = await pool.query(
     'SELECT * FROM sync_runs ORDER BY started_at DESC LIMIT 20');
   const threshold = await getSetting(pool, 'score_threshold', 65);
-  res.render('admin', { runs, threshold });
+  const { DEFAULT_MULTIPLIERS } = require('../trades');
+  const saved = await getSetting(pool, 'multipliers', {});
+  const multipliers = { ...DEFAULT_MULTIPLIERS, ...saved };
+  res.render('admin', { runs, threshold, multipliers });
+});
+
+router.post('/admin/multipliers', async (req, res) => {
+  try {
+    const parsed = JSON.parse(req.body.multipliers || '{}');
+    const clean = {};
+    for (const [k, v] of Object.entries(parsed)) {
+      const n = Number(v);
+      if (Number.isFinite(n) && n > 0) clean[String(k).toUpperCase()] = n;
+    }
+    await setSetting(pool, 'multipliers', clean);
+  } catch (err) {
+    console.error('bad multipliers JSON:', err.message);
+  }
+  res.redirect('/admin');
 });
 
 router.post('/admin/settings', async (req, res) => {
