@@ -18,6 +18,10 @@ async function loadMultipliers() {
   return { ...DEFAULT_MULTIPLIERS, ...saved };
 }
 
+async function aiOn() {
+  return !!process.env.ANTHROPIC_API_KEY && (await getSetting(pool, 'ai_enabled', true));
+}
+
 async function allFills() {
   const { rows } = await pool.query(
     `SELECT id, to_char(trade_date, 'YYYY-MM-DD') AS trade_date, side, qty,
@@ -60,13 +64,14 @@ router.get('/', async (req, res) => {
     msg: req.query.msg || null,
     err: req.query.err || null,
     today: todayStr(),
-    visionAvailable: !!process.env.ANTHROPIC_API_KEY,
+    visionAvailable: await aiOn(),
   });
 });
 
 router.post('/upload', upload.single('screenshot'), async (req, res) => {
   try {
     if (!req.file) throw new Error('No image attached');
+    if (!(await aiOn())) throw new Error('Screenshot reading is off (enable AI on the Admin page). Add trades manually below.');
     const tradeDate = req.body.trade_date || todayStr();
     const fills = await parseFillsFromImage({
       imageBase64: req.file.buffer.toString('base64'),
@@ -138,7 +143,7 @@ router.get('/report/:ym?', async (req, res) => {
   const multipliers = await loadMultipliers();
   const { open, closed } = matchFills(fills, multipliers);
   const report = computeMonthlyReport({ closed, open, month: ym });
-  const coach = await coachNotes({ report });
+  const coach = (await aiOn()) ? await coachNotes({ report }) : null;
   // Months that actually have closed trades, for the picker.
   const months = [...new Set(closed.map((t) => t.exitDate.slice(0, 7)))].sort().reverse();
   if (!months.includes(ym)) months.unshift(ym);

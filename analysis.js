@@ -8,7 +8,7 @@ const DEFAULT_MODEL = process.env.ANALYSIS_MODEL || 'claude-opus-4-8';
 // Per-cycle setup evaluation runs ~50-100x per sync, so it defaults to a
 // cheap model. Override with SETUP_MODEL (e.g. claude-sonnet-4-6 for sharper
 // reads at higher cost). The one-off vision/coach paths use DEFAULT_MODEL.
-const SETUP_MODEL = process.env.SETUP_MODEL || process.env.ANALYSIS_MODEL || 'claude-haiku-4-5';
+const SETUP_MODEL = process.env.SETUP_MODEL || process.env.ANALYSIS_MODEL || 'claude-sonnet-4-6';
 
 const VERDICT_SCHEMA = {
   type: 'object',

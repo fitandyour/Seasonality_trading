@@ -49,7 +49,14 @@ router.get('/admin', async (req, res) => {
   const { DEFAULT_MULTIPLIERS } = require('../trades');
   const saved = await getSetting(pool, 'multipliers', {});
   const multipliers = { ...DEFAULT_MULTIPLIERS, ...saved };
-  res.render('admin', { runs, threshold, multipliers });
+  const aiEnabled = await getSetting(pool, 'ai_enabled', true);
+  const hasKey = !!process.env.ANTHROPIC_API_KEY;
+  res.render('admin', { runs, threshold, multipliers, aiEnabled, hasKey });
+});
+
+router.post('/admin/ai-toggle', async (req, res) => {
+  await setSetting(pool, 'ai_enabled', req.body.ai_enabled === 'on');
+  res.redirect('/admin');
 });
 
 router.post('/admin/multipliers', async (req, res) => {

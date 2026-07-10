@@ -108,7 +108,7 @@ async function upsertPoints(db, rows) {
   }
 }
 
-async function syncOneStrategy({ db, client, strategy, todayDate, analogYears }) {
+async function syncOneStrategy({ db, client, strategy, todayDate, analogYears, aiEnabled }) {
   // Prefer the live stored config from Scarr; fall back to the config
   // captured at import time (pasted URL).
   let form = strategy.config.form;
@@ -182,7 +182,7 @@ async function syncOneStrategy({ db, client, strategy, todayDate, analogYears })
       });
       continue;
     }
-    const verdict = worthEvaluating(line)
+    const verdict = (aiEnabled && worthEvaluating(line))
       ? await evaluateCycle({
         strategy,
         cycle: { label: p.label, front: line.front, analog: line.analog, trade: line.trade },
@@ -228,9 +228,10 @@ async function runSync({ db, client, todayDate }) {
     const { rows: strategies } = await db.query(
       'SELECT id, save_name, years_back, config FROM strategies WHERE active = true ORDER BY save_name');
     const analogYears = await getSetting(db, 'analog_years', DEFAULT_ANALOG_YEARS);
+    const aiEnabled = !!process.env.ANTHROPIC_API_KEY && (await getSetting(db, 'ai_enabled', true));
     for (const strategy of strategies) {
       try {
-        const r = await syncOneStrategy({ db, client, strategy, todayDate, analogYears });
+        const r = await syncOneStrategy({ db, client, strategy, todayDate, analogYears, aiEnabled });
         results.push({ saveName: strategy.save_name, ok: true, ...r });
       } catch (err) {
         status = 'partial';

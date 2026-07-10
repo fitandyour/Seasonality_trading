@@ -10,6 +10,22 @@
     </form>
   </div>
   <div class="card">
+    <h3>Anthropic AI</h3>
+    <p class="muted" style="font-size:.85rem">
+      Master switch for all Claude use (setup evaluation during sync, screenshot reading, monthly coach).
+      Turn off to run purely on the computed engine and spend nothing.
+      <% if (!hasKey) { %><br><span style="color:var(--warn)">No ANTHROPIC_API_KEY set in Railway — AI is unavailable regardless of this switch.</span><% } %>
+    </p>
+    <form method="post" action="/admin/ai-toggle" style="display:flex;align-items:center;gap:.7rem">
+      <label class="switch">
+        <input type="checkbox" name="ai_enabled" onchange="this.form.submit()" <%= aiEnabled ? 'checked' : '' %>>
+        <span class="slider"></span>
+      </label>
+      <span><strong><%= aiEnabled ? 'AI ON' : 'AI OFF' %></strong> — <%= aiEnabled ? 'Claude evaluates setups and reads screenshots' : 'computed engine only, no API cost' %></span>
+    </form>
+  </div>
+
+  <div class="card">
     <h3>Point multipliers ($ per 1.00 point, per symbol)</h3>
     <p class="muted" style="font-size:.83rem">Used to turn spread points into dollars in the trade journal. JSON — edit and save.</p>
     <form method="post" action="/admin/multipliers" class="stack" style="max-width:520px">
