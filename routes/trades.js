@@ -18,8 +18,13 @@ async function loadMultipliers() {
   return { ...DEFAULT_MULTIPLIERS, ...saved };
 }
 
+function hasKey() { return !!process.env.ANTHROPIC_API_KEY; }
+
+// The master AI toggle gates the expensive seasonal sync + the on-demand coach.
+// Screenshot reading for trade logging is NOT gated — it always works when a
+// key is present (one cheap call a day).
 async function aiOn() {
-  return !!process.env.ANTHROPIC_API_KEY && (await getSetting(pool, 'ai_enabled', true));
+  return hasKey() && (await getSetting(pool, 'ai_enabled', true));
 }
 
 async function allFills() {
@@ -64,14 +69,15 @@ router.get('/', async (req, res) => {
     msg: req.query.msg || null,
     err: req.query.err || null,
     today: todayStr(),
-    visionAvailable: await aiOn(),
+    visionAvailable: hasKey(), // trade-logging vision always on when a key is set
   });
 });
 
 router.post('/upload', upload.single('screenshot'), async (req, res) => {
   try {
     if (!req.file) throw new Error('No image attached');
-    if (!(await aiOn())) throw new Error('Screenshot reading is off (enable AI on the Admin page). Add trades manually below.');
+    // Screenshot reading is intentionally not gated by the AI master toggle —
+    // it only needs the API key (parseFillsFromImage throws a clear message if absent).
     const tradeDate = req.body.trade_date || todayStr();
     const fills = await parseFillsFromImage({
       imageBase64: req.file.buffer.toString('base64'),

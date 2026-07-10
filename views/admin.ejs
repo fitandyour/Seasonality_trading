@@ -12,9 +12,10 @@
   <div class="card">
     <h3>Anthropic AI</h3>
     <p class="muted" style="font-size:.85rem">
-      Master switch for all Claude use (setup evaluation during sync, screenshot reading, monthly coach).
-      Turn off to run purely on the computed engine and spend nothing.
-      <% if (!hasKey) { %><br><span style="color:var(--warn)">No ANTHROPIC_API_KEY set in Railway — AI is unavailable regardless of this switch.</span><% } %>
+      Controls the costly part: Claude's setup evaluation during the seasonal sync and the monthly coach.
+      Turn off to run those on the computed engine at no API cost.
+      <strong>Screenshot reading for trade logging always works</strong> when a key is set — it is not affected by this switch.
+      <% if (!hasKey) { %><br><span style="color:var(--warn)">No ANTHROPIC_API_KEY set in Railway — AI is unavailable.</span><% } %>
     </p>
     <form method="post" action="/admin/ai-toggle" style="display:flex;align-items:center;gap:.7rem">
       <label class="switch">
