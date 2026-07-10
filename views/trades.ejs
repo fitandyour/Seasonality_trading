@@ -26,7 +26,7 @@
         </div>
         <input name="contract" placeholder="Aug26-Oct26 Calendar" required>
         <div style="display:flex;gap:.5rem">
-          <input name="price" type="number" step="any" placeholder="Price" required>
+          <input name="price" type="number" step="any" placeholder="Level (e.g. 7.425 or -0.525)" required>
           <input name="account" placeholder="Account (optional)">
           <input name="trade_date" type="date" value="<%= today %>">
         </div>
@@ -39,7 +39,7 @@
     <h2>Open positions <span class="muted" style="font-size:.85rem"><%= open.length %></span></h2>
     <% if (!open.length) { %><p class="muted">Flat — no open positions.</p><% } else { %>
     <table>
-      <tr><th>Since</th><th>Position</th><th>Qty</th><th>Avg price</th><th>Type</th></tr>
+      <tr><th>Since</th><th>Position</th><th>Qty</th><th>Avg level</th><th>Type</th></tr>
       <% for (const p of open) { %>
       <tr>
         <td><%= p.since %></td>
@@ -78,7 +78,7 @@
     <h2>Fill history <span class="muted" style="font-size:.85rem">last <%= fills.length %></span></h2>
     <% if (!fills.length) { %><p class="muted">No fills recorded yet.</p><% } else { %>
     <table>
-      <tr><th>Date</th><th>Side</th><th>Qty</th><th>Contract</th><th>Price</th><th>Src</th><th></th></tr>
+      <tr><th>Date</th><th>Side</th><th>Qty</th><th>Contract</th><th>Level</th><th>Src</th><th></th></tr>
       <% for (const f of fills) { %>
       <tr>
         <td>

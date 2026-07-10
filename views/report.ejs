@@ -97,7 +97,7 @@
     <h3>Open positions<%= report.trades ? ' at month end' : '' %></h3>
     <% if (!report.openAtEnd.length) { %><p class="muted">Flat.</p><% } else { %>
     <table>
-      <tr><th>Since</th><th>Position</th><th>Qty</th><th>Avg price</th></tr>
+      <tr><th>Since</th><th>Position</th><th>Qty</th><th>Avg level</th></tr>
       <% for (const p of report.openAtEnd) { %>
       <tr><td><%= p.since %></td><td><%= p.side %> <%= p.key %></td><td><%= p.qty %></td><td><%= p.avgPrice %></td></tr>
       <% } %>
