@@ -37,15 +37,16 @@
 
   <div class="card">
     <h2>Open positions <span class="muted" style="font-size:.85rem"><%= open.length %></span></h2>
+    <p class="muted" style="font-size:.82rem">Each open trade shown individually — this count matches the <strong>OPEN</strong>/partial rows in the fill list below.</p>
     <% if (!open.length) { %><p class="muted">Flat — no open positions.</p><% } else { %>
     <table>
-      <tr><th>Since</th><th>Position</th><th>Qty</th><th>Avg level</th><th>Type</th></tr>
+      <tr><th>Since</th><th>Position</th><th>Qty</th><th>Entry level</th><th>Type</th></tr>
       <% for (const p of open) { %>
       <tr>
         <td><%= p.since %></td>
         <td><span class="badge <%= p.side === 'long' ? 'flag' : 'fail' %>"><%= p.side.toUpperCase() %></span> <%= p.key %></td>
         <td><%= p.qty %></td>
-        <td><%= p.avgPrice %></td>
+        <td><%= p.price %></td>
         <td class="muted"><%= p.type %></td>
       </tr>
       <% } %>

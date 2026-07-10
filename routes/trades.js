@@ -59,12 +59,12 @@ router.use(requireAuth);
 router.get('/', async (req, res) => {
   const fills = await allFills();
   const multipliers = await loadMultipliers();
-  const { open, closed, status } = matchFills(fills, multipliers);
+  const { openLots, closed, status } = matchFills(fills, multipliers);
   const recentClosed = closed.slice(-15).reverse();
   res.render('trades', {
     fills: fills.slice(-60).reverse(),
     status,
-    open,
+    open: openLots,
     recentClosed,
     msg: req.query.msg || null,
     err: req.query.err || null,

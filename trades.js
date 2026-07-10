@@ -155,9 +155,10 @@ function matchFills(fills, multipliers = DEFAULT_MULTIPLIERS) {
   const consumed = new Map(); // fill id -> qty matched off
   const bump = (id, m) => { if (id != null) consumed.set(id, (consumed.get(id) || 0) + m); };
 
-  const open = []; const closed = [];
+  const open = []; const openLots = []; const closed = [];
   for (const [, list] of groups) {
     const key = `${list[0].symbol} ${list[0].contract}`;
+    const type = spreadType(list[0].contract);
     const queue = []; // open lots, oldest first
     for (const f of list) {
       let remaining = f.qty;
@@ -181,11 +182,20 @@ function matchFills(fills, multipliers = DEFAULT_MULTIPLIERS) {
       }
       if (remaining > 0) queue.push({ side: f.side, qty: remaining, price: f.price, date: f.trade_date, fillId: f.id });
     }
+    // One open lot per still-open fill — so this reconciles 1:1 with the
+    // OPEN/partial fills in the journal (no netting to hide the count).
+    for (const lot of queue) {
+      openLots.push({
+        key, symbol: list[0].symbol, contract: list[0].contract, type,
+        side: lot.side === 'buy' ? 'long' : 'short',
+        qty: lot.qty, price: round4(lot.price), since: lot.date, fillId: lot.fillId,
+      });
+    }
     if (queue.length) {
       const qty = queue.reduce((s, l) => s + l.qty, 0);
       const avg = queue.reduce((s, l) => s + l.price * l.qty, 0) / qty;
       open.push({
-        key, symbol: list[0].symbol, contract: list[0].contract, type: spreadType(list[0].contract),
+        key, symbol: list[0].symbol, contract: list[0].contract, type,
         side: queue[0].side === 'buy' ? 'long' : 'short',
         qty, avgPrice: round4(avg), since: queue[0].date,
       });
@@ -198,8 +208,9 @@ function matchFills(fills, multipliers = DEFAULT_MULTIPLIERS) {
     status[f.id] = c === 0 ? 'open' : c >= f.qty ? 'closed' : 'partial';
   }
   open.sort((a, b) => (a.since < b.since ? -1 : 1));
+  openLots.sort((a, b) => (a.since < b.since ? -1 : 1));
   closed.sort((a, b) => (a.exitDate < b.exitDate ? -1 : 1));
-  return { open, closed, status };
+  return { open, openLots, closed, status };
 }
 
 module.exports = {

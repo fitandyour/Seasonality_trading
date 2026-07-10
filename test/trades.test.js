@@ -150,3 +150,19 @@ test('matchFills reports per-fill status: closed / open / partial', () => {
   assert.equal(status[2], 'closed');  // fully matched
   assert.equal(status[3], 'open');    // nothing to match against
 });
+
+test('openLots reconcile 1:1 with non-closed fills', () => {
+  const fills = [
+    { id: 1, trade_date: '2026-07-01', side: 'buy', qty: 1, symbol: 'GF', contract: 'Aug26-Oct26 Calendar', price: 6 },
+    { id: 2, trade_date: '2026-07-01', side: 'buy', qty: 1, symbol: 'GF', contract: 'Aug26-Oct26 Calendar', price: 6.2 },
+    { id: 3, trade_date: '2026-07-02', side: 'sell', qty: 1, symbol: 'HE', contract: 'Aug26-Oct26 Calendar', price: 14 },
+    { id: 4, trade_date: '2026-07-02', side: 'buy', qty: 1, symbol: 'ZC', contract: 'Dec26-Mar27 Calendar', price: 2 },
+    { id: 5, trade_date: '2026-07-05', side: 'sell', qty: 1, symbol: 'ZC', contract: 'Dec26-Mar27 Calendar', price: 3 },
+  ];
+  const { open, openLots, status } = matchFills(fills);
+  const openish = fills.filter((f) => status[f.id] !== 'closed');
+  assert.equal(openLots.length, openish.length, 'one open lot per non-closed fill');
+  assert.equal(openLots.length, 3);
+  assert.equal(open.length, 2);
+  assert.ok(!openLots.some((l) => l.symbol === 'ZC'));
+});
