@@ -36,14 +36,8 @@ async function allFills() {
 }
 
 async function insertFill(f, tradeDate, source) {
-  // Skip exact duplicates (same day, side, qty, contract, price, account) —
-  // protects against uploading the same screenshot twice.
-  const { rows } = await pool.query(
-    `SELECT id FROM trades WHERE trade_date = $1 AND side = $2 AND qty = $3
-       AND symbol = $4 AND contract = $5 AND price = $6
-       AND COALESCE(account,'') = COALESCE($7,'')`,
-    [tradeDate, f.side, f.qty, f.symbol, f.contract, f.price, f.account]);
-  if (rows.length) return false;
+  // No dedup — the user uploads only new fills each day, so every row on the
+  // photo should be recorded (two identical fills at the same level are real).
   await pool.query(
     `INSERT INTO trades (trade_date, side, qty, exchange, symbol, contract,
                          price, account, tif, order_type, source)
@@ -84,11 +78,8 @@ router.post('/upload', upload.single('screenshot'), async (req, res) => {
       mediaType: req.file.mimetype || 'image/png',
     });
     if (!fills.length) throw new Error('No filled orders found in the screenshot');
-    let added = 0; let skipped = 0;
-    for (const f of fills) {
-      (await insertFill(f, tradeDate, 'screenshot')) ? added++ : skipped++;
-    }
-    res.redirect(`/trades?msg=${encodeURIComponent(`Imported ${added} fill(s)` + (skipped ? `, skipped ${skipped} duplicate(s)` : ''))}`);
+    for (const f of fills) await insertFill(f, tradeDate, 'screenshot');
+    res.redirect(`/trades?msg=${encodeURIComponent(`Imported ${fills.length} fill(s)`)}`);
   } catch (err) {
     res.redirect(`/trades?err=${encodeURIComponent(err.message)}`);
   }
@@ -141,6 +132,11 @@ router.post('/:id(\\d+)/edit', async (req, res) => {
 router.post('/:id(\\d+)/delete', async (req, res) => {
   await pool.query('DELETE FROM trades WHERE id = $1', [req.params.id]);
   res.redirect('/trades');
+});
+
+router.post('/clear', async (req, res) => {
+  await pool.query('DELETE FROM trades');
+  res.redirect('/trades?msg=' + encodeURIComponent('All fills cleared'));
 });
 
 router.get('/report/:ym?', async (req, res) => {

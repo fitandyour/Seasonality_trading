@@ -166,3 +166,41 @@ test('openLots reconcile 1:1 with non-closed fills', () => {
   assert.equal(open.length, 2);
   assert.ok(!openLots.some((l) => l.symbol === 'ZC'));
 });
+
+test('qty-2 fills: full round trip closes with correct pnl', () => {
+  const { open, closed } = matchFills([
+    fill({ id: 1, side: 'buy', qty: 2, price: 6.0 }),
+    fill({ id: 2, trade_date: '2026-07-05', side: 'sell', qty: 2, price: 7.0 }),
+  ]);
+  assert.equal(open.length, 0, 'fully closed → nothing open');
+  assert.equal(closed.length, 1);
+  assert.equal(closed[0].qty, 2);
+  assert.equal(closed[0].points, 1);
+  assert.equal(closed[0].pnl, 1 * DEFAULT_MULTIPLIERS.GF * 2); // qty scales dollars
+});
+
+test('qty-2 sell closes against two qty-1 buys (FIFO), status all closed', () => {
+  const { open, closed, status } = matchFills([
+    fill({ id: 1, side: 'buy', qty: 1, price: 6.0 }),
+    fill({ id: 2, trade_date: '2026-07-02', side: 'buy', qty: 1, price: 6.4 }),
+    fill({ id: 3, trade_date: '2026-07-06', side: 'sell', qty: 2, price: 7.0 }),
+  ]);
+  assert.equal(open.length, 0);
+  assert.equal(closed.length, 2, 'two round trips, one per buy lot');
+  assert.equal(status[1], 'closed');
+  assert.equal(status[2], 'closed');
+  assert.equal(status[3], 'closed');
+});
+
+test('qty-2 buy partially closed by qty-1 sell leaves qty-1 open', () => {
+  const { openLots, closed, status } = matchFills([
+    fill({ id: 1, side: 'buy', qty: 2, price: 6.0 }),
+    fill({ id: 2, trade_date: '2026-07-04', side: 'sell', qty: 1, price: 7.0 }),
+  ]);
+  assert.equal(closed.length, 1);
+  assert.equal(closed[0].qty, 1);
+  assert.equal(openLots.length, 1);
+  assert.equal(openLots[0].qty, 1);
+  assert.equal(status[1], 'partial');
+  assert.equal(status[2], 'closed');
+});

@@ -76,8 +76,15 @@
   <% } %>
 
   <div class="card">
-    <h2>All fills <span class="muted" style="font-size:.85rem">last <%= fills.length %></span></h2>
-    <p class="muted" style="font-size:.82rem">
+    <div style="display:flex;flex-wrap:wrap;gap:.6rem;align-items:center;justify-content:space-between">
+      <h2 style="margin:0">All fills <span class="muted" style="font-size:.85rem"><%= fills.length %></span></h2>
+      <div id="fillfilter" style="display:flex;gap:.35rem">
+        <button type="button" data-filter="all" class="ff active">All</button>
+        <button type="button" data-filter="open" class="ff">Open</button>
+        <button type="button" data-filter="closed" class="ff">Closed</button>
+      </div>
+    </div>
+    <p class="muted" style="font-size:.82rem;margin-top:.4rem">
       <span class="badge off">OPEN</span> still on · <span style="text-decoration:line-through;opacity:.6">closed</span> matched into a round trip · <span style="opacity:.75">partial</span> partly matched.
       Edit a row to fix a mis-read contract so a stuck pair nets off.
     </p>
@@ -90,7 +97,7 @@
       <tr><th>Date</th><th>Side</th><th>Qty</th><th>Symbol</th><th>Contract</th><th>Level</th><th>State</th><th></th></tr>
       <% for (const f of fills) { const st = status[f.id] || 'open';
          const rowStyle = st === 'closed' ? 'text-decoration:line-through;opacity:.55' : (st === 'partial' ? 'opacity:.8' : ''); %>
-      <tr style="<%= rowStyle %>">
+      <tr data-status="<%= st %>" style="<%= rowStyle %>">
         <td><input form="e<%= f.id %>" type="date" name="trade_date" value="<%= f.trade_date %>" style="padding:.15rem .3rem;font-size:.82rem;width:8.5rem"></td>
         <td><select form="e<%= f.id %>" name="side" style="padding:.15rem;font-size:.82rem">
           <option value="buy" <%= f.side === 'buy' ? 'selected' : '' %>>buy</option>
@@ -112,6 +119,34 @@
       </tr>
       <% } %>
     </table>
+    <p class="muted" style="font-size:.8rem;margin-top:.7rem">
+      <form method="post" action="/trades/clear" style="display:inline"
+            onsubmit="return confirm('Delete ALL fills and start the journal fresh? This cannot be undone.')">
+        <button style="background:var(--bad);font-size:.78rem;padding:.2rem .6rem">Clear all fills</button>
+      </form>
+      Use this to wipe a messy import and re-upload clean photos.
+    </p>
     <% } %>
   </div>
+
+  <style>
+    #fillfilter .ff { background:var(--field); color:var(--muted); border:1px solid var(--border); padding:.25rem .7rem; font-size:.82rem; font-weight:500; }
+    #fillfilter .ff.active { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); }
+  </style>
+  <script>
+    (function () {
+      var btns = document.querySelectorAll('#fillfilter .ff');
+      btns.forEach(function (b) {
+        b.addEventListener('click', function () {
+          var f = b.dataset.filter;
+          btns.forEach(function (x) { x.classList.toggle('active', x === b); });
+          document.querySelectorAll('tr[data-status]').forEach(function (r) {
+            var st = r.dataset.status;
+            var show = f === 'all' || (f === 'open' && st !== 'closed') || (f === 'closed' && st === 'closed');
+            r.style.display = show ? '' : 'none';
+          });
+        });
+      });
+    })();
+  </script>
 </main></body></html>
