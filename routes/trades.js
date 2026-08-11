@@ -4,6 +4,7 @@ const { pool } = require('../db');
 const { requireAuth } = require('../auth');
 const { parseFillsFromImage, matchFills, DEFAULT_MULTIPLIERS } = require('../trades');
 const { computeMonthlyReport, coachNotes } = require('../report');
+const { buildTradesWorkbook } = require('../xlsxexport');
 const { getSetting } = require('../sync');
 
 const upload = multer({
@@ -137,6 +138,17 @@ router.post('/:id(\\d+)/delete', async (req, res) => {
 router.post('/clear', async (req, res) => {
   await pool.query('DELETE FROM trades');
   res.redirect('/trades?msg=' + encodeURIComponent('All fills cleared'));
+});
+
+router.get('/export.xlsx', async (req, res) => {
+  const fills = await allFills();
+  const multipliers = await loadMultipliers();
+  const { openLots, closed, status } = matchFills(fills, multipliers);
+  const wb = await buildTradesWorkbook({ fills, openLots, closed, status });
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="trades-${todayStr()}.xlsx"`);
+  await wb.xlsx.write(res);
+  res.end();
 });
 
 router.get('/report/:ym?', async (req, res) => {

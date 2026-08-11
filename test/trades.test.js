@@ -204,3 +204,21 @@ test('qty-2 buy partially closed by qty-1 sell leaves qty-1 open', () => {
   assert.equal(status[1], 'partial');
   assert.equal(status[2], 'closed');
 });
+
+const { buildTradesWorkbook } = require('../xlsxexport');
+
+test('buildTradesWorkbook produces the three sheets with correct rows', async () => {
+  const fills = [
+    { id: 1, trade_date: '2026-07-01', side: 'buy', qty: 1, symbol: 'GF', contract: 'Aug26-Oct26 Calendar', price: 6.375, source: 'screenshot' },
+    { id: 2, trade_date: '2026-07-08', side: 'sell', qty: 1, symbol: 'GF', contract: 'Aug26-Oct26 Calendar', price: 7.425, source: 'screenshot' },
+    { id: 3, trade_date: '2026-07-09', side: 'buy', qty: 1, symbol: 'HE', contract: 'Aug26-Oct26 Calendar', price: 14.2, source: 'manual' },
+  ];
+  const { openLots, closed, status } = matchFills(fills);
+  const wb = await buildTradesWorkbook({ fills, openLots, closed, status });
+  assert.deepEqual(wb.worksheets.map((w) => w.name), ['All fills', 'Closed trades', 'Open positions']);
+  assert.equal(wb.getWorksheet('All fills').rowCount, 4);      // header + 3 fills
+  assert.equal(wb.getWorksheet('Closed trades').rowCount, 2);  // header + 1 round trip
+  assert.equal(wb.getWorksheet('Open positions').rowCount, 2); // header + 1 open (HE)
+  const buf = await wb.xlsx.writeBuffer();
+  assert.ok(buf.length > 0, 'writes a non-empty file');
+});

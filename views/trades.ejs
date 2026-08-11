@@ -78,10 +78,13 @@
   <div class="card">
     <div style="display:flex;flex-wrap:wrap;gap:.6rem;align-items:center;justify-content:space-between">
       <h2 style="margin:0">All fills <span class="muted" style="font-size:.85rem"><%= fills.length %></span></h2>
-      <div id="fillfilter" style="display:flex;gap:.35rem">
-        <button type="button" data-filter="all" class="ff active">All</button>
-        <button type="button" data-filter="open" class="ff">Open</button>
-        <button type="button" data-filter="closed" class="ff">Closed</button>
+      <div style="display:flex;gap:.6rem;align-items:center">
+        <a href="/trades/export.xlsx" class="ff" style="text-decoration:none;padding:.3rem .8rem;border-radius:8px">⬇ Export to Excel</a>
+        <div id="fillfilter" style="display:flex;gap:.35rem">
+          <button type="button" data-filter="all" class="ff active">All</button>
+          <button type="button" data-filter="open" class="ff">Open</button>
+          <button type="button" data-filter="closed" class="ff">Closed</button>
+        </div>
       </div>
     </div>
     <p class="muted" style="font-size:.82rem;margin-top:.4rem">
