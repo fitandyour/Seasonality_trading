@@ -18,16 +18,43 @@ function safeName(name) {
   return name.replace(/[\/:]+/g, '-').replace(/\s+/g, ' ').trim();
 }
 
+function addDaysStr(d, n) {
+  const dt = new Date(`${d}T00:00:00Z`);
+  dt.setUTCDate(dt.getUTCDate() + n);
+  return dt.toISOString().slice(0, 10);
+}
+
 // Fetch + write one chart. Returns { name, labels, rows, csvPath, svgPath }.
 async function exportChart({ client, name, years = 10, outDir, csvOnly = false }) {
   const form = await client.fetchChartConfig(name);
   const contracts = await client.fetchContracts(form.sampleContract);
   const anchors = feasibleAnchors(form, contracts);
   if (!anchors.length) throw new Error('no feasible contracts');
-  const rolled = rollForwardAt(form, contracts, years, anchors[0]); // current + `years` priors
+  // Fetch a couple extra years so that after we skip any not-yet-live future
+  // cycles, the live front + `years` real priors are all present.
+  const rolled = rollForwardAt(form, contracts, years + 2, anchors[0]);
   const payload = await client.fetchChartData(rolled);
-  const { dates, cols } = matrixFromPayload(payload);
-  const labels = rolled.selected;
+  const full = matrixFromPayload(payload);
+  let { dates, cols } = full;
+  let labels = rolled.selected;
+
+  // Pick the LIVE FRONT column: the newest anchor is often a future cycle whose
+  // data stopped ~a year ago. A prior year's data (already complete) runs to
+  // the axis end (future). The live front is the column whose data ends nearest
+  // to today. Drop any future cycles ahead of it, keep front + `years` priors.
+  const today = new Date().toISOString().slice(0, 10);
+  const grace = addDaysStr(today, 60);
+  const lastDate = cols.map((col) => {
+    for (let i = dates.length - 1; i >= 0; i--) if (col[i] != null) return dates[i];
+    return null;
+  });
+  let frontIdx = 0; let best = null;
+  for (let c = 0; c < cols.length; c++) {
+    const ld = lastDate[c];
+    if (ld != null && ld <= grace && (best == null || ld > best)) { best = ld; frontIdx = c; }
+  }
+  cols = cols.slice(frontIdx, frontIdx + years + 1);
+  labels = labels.slice(frontIdx, frontIdx + years + 1);
 
   const header = ['Date', ...labels];
   const lines = [header.join(',')];
