@@ -45,6 +45,29 @@ async function main() {
     log('Failed charts:');
     failures.forEach((f) => log(`  ${f.name} — ${f.error}`));
   }
+
+  // Re-batch into folders of 20 (Claude chat uploads max 20 files at a time).
+  batchInto(OUT_DIR, 20, log);
+}
+
+const BATCH_SIZE = 20;
+
+function batchInto(dir, size, log) {
+  // Clear last run's batch folders so we don't accumulate stale files.
+  for (const entry of fs.readdirSync(dir)) {
+    if (/^batch \d+$/.test(entry) && fs.statSync(path.join(dir, entry)).isDirectory()) {
+      fs.rmSync(path.join(dir, entry), { recursive: true, force: true });
+    }
+  }
+  const csvs = fs.readdirSync(dir)
+    .filter((f) => f.endsWith('.csv'))
+    .sort((a, b) => a.localeCompare(b));
+  let batch = 0;
+  csvs.forEach((f, i) => {
+    if (i % size === 0) { batch += 1; fs.mkdirSync(path.join(dir, `batch ${batch}`), { recursive: true }); }
+    fs.renameSync(path.join(dir, f), path.join(dir, `batch ${batch}`, f));
+  });
+  log(`Batched ${csvs.length} files into ${batch} folders of up to ${size}.`);
 }
 
 main().catch((e) => { console.error('FATAL:', e.message); process.exit(1); });
