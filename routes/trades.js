@@ -3,7 +3,8 @@ const multer = require('multer');
 const { pool } = require('../db');
 const { requireAuth } = require('../auth');
 const { parseFillsFromImage, matchFills, DEFAULT_MULTIPLIERS } = require('../trades');
-const { computeMonthlyReport, coachNotes } = require('../report');
+const { computePeriodReport, coachNotes } = require('../report');
+const { seasonChartSvg } = require('../chartsvg');
 const { buildTradesWorkbook } = require('../xlsxexport');
 const { getSetting } = require('../sync');
 
@@ -151,17 +152,34 @@ router.get('/export.xlsx', async (req, res) => {
   res.end();
 });
 
-router.get('/report/:ym?', async (req, res) => {
-  const ym = /^\d{4}-\d{2}$/.test(req.params.ym || '') ? req.params.ym : todayStr().slice(0, 7);
+// /report            → current month
+// /report/2026-07    → that month
+// /report/2026       → year to date
+router.get('/report/:period?', async (req, res) => {
+  const today = todayStr();
+  const p = req.params.period || '';
+  const period = /^\d{4}(-\d{2})?$/.test(p) ? p : today.slice(0, 7);
   const fills = await allFills();
   const multipliers = await loadMultipliers();
   const { open, closed } = matchFills(fills, multipliers);
-  const report = computeMonthlyReport({ closed, open, month: ym });
+  const report = computePeriodReport({ closed, open, period, today });
   const coach = (await aiOn()) ? await coachNotes({ report }) : null;
-  // Months that actually have closed trades, for the picker.
+  // Periods that actually have closed trades, for the pickers.
   const months = [...new Set(closed.map((t) => t.exitDate.slice(0, 7)))].sort().reverse();
-  if (!months.includes(ym)) months.unshift(ym);
-  res.render('report', { report, coach, months, ym });
+  const years = [...new Set(closed.map((t) => t.exitDate.slice(0, 4)))].sort().reverse();
+  if (!months.includes(today.slice(0, 7))) months.unshift(today.slice(0, 7));
+  if (!years.includes(today.slice(0, 4))) years.unshift(today.slice(0, 4));
+  if (report.kind === 'month' && !months.includes(period)) months.push(period);
+  if (report.kind === 'year' && !years.includes(period)) years.push(period);
+  // Realized equity curve (exit order) for the chart.
+  const equitySvg = report.equity.length > 1
+    ? seasonChartSvg({
+      lines: [{ points: report.equity.map((e, i) => ({ x: i, y: e.cum })), cls: 'current' }],
+      markers: [{ x: report.equity.length - 1, y: report.netPnl, text: `$${report.netPnl}` }],
+      width: 900, height: 200, yAxis: true,
+    })
+    : null;
+  res.render('report', { report, coach, months, years, period, equitySvg });
 });
 
 module.exports = { router };

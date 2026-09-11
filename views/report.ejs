@@ -3,43 +3,132 @@
   .stats { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:.7rem; }
   .stat { background:#0b1220; border:1px solid #334155; border-radius:8px; padding:.6rem .8rem; }
   .stat b { display:block; font-size:1.25rem; margin-top:.15rem; }
+  .stat small { display:block; color:var(--muted,#94a3b8); font-size:.72rem; margin-top:.15rem; }
   .pos { color:var(--good); } .neg { color:var(--bad); }
+  .seg { display:inline-flex; border:1px solid #334155; border-radius:8px; overflow:hidden; margin-right:.6rem; }
+  .seg a { padding:.35rem .8rem; text-decoration:none; color:inherit; font-size:.9rem; }
+  .seg a.on { background:#1e293b; font-weight:600; }
+  .eq svg { width:100%; height:auto; display:block; }
+  .eq .current { stroke:#38bdf8; stroke-width:2; }
+  .insight { border-left:3px solid #38bdf8; padding:.4rem .7rem; margin:.4rem 0; background:#0b1220; border-radius:0 6px 6px 0; font-size:.92rem; }
+  .insight.warn { border-color:var(--bad); }
+  .insight.good { border-color:var(--good); }
 </style>
 <main>
+  <% const isYear = report.kind === 'year'; %>
+  <% const curMonth = months[0]; const curYear = years[0]; %>
   <div class="card">
-    <h2>Monthly report — <%= ym %></h2>
-    <form method="get" style="display:inline">
-      <select onchange="location='/trades/report/'+this.value">
-        <% for (const m of months) { %>
-        <option value="<%= m %>" <%= m === ym ? 'selected' : '' %>><%= m %></option>
-        <% } %>
-      </select>
-    </form>
+    <h2><%= isYear ? 'Year to date' : 'Monthly report' %> — <%= period %></h2>
+    <span class="seg">
+      <a href="/trades/report/<%= isYear ? curMonth : period %>" class="<%= !isYear ? 'on' : '' %>">Month</a>
+      <a href="/trades/report/<%= isYear ? period : period.slice(0,4) %>" class="<%= isYear ? 'on' : '' %>">Year to date</a>
+    </span>
+    <% if (!isYear) { %>
+    <select onchange="location='/trades/report/'+this.value">
+      <% for (const m of months) { %>
+      <option value="<%= m %>" <%= m === period ? 'selected' : '' %>><%= m %></option>
+      <% } %>
+    </select>
+    <% } else { %>
+    <select onchange="location='/trades/report/'+this.value">
+      <% for (const y of years) { %>
+      <option value="<%= y %>" <%= y === period ? 'selected' : '' %>><%= y %></option>
+      <% } %>
+    </select>
+    <% } %>
     <a href="/trades/export.xlsx" style="margin-left:.6rem;font-size:.9rem">⬇ Export all trades to Excel</a>
     <% if (!report.trades) { %>
-      <p class="muted" style="margin-top:.8rem">No closed trades in <%= ym %>. Positions closed this month appear here automatically.</p>
+      <p class="muted" style="margin-top:.8rem">No closed trades in <%= period %>. Positions closed in this period appear here automatically.</p>
     <% } %>
   </div>
 
   <% function cls(n) { return n > 0 ? 'pos' : (n < 0 ? 'neg' : ''); } %>
+  <% function money(n) { return n == null ? '—' : (n < 0 ? '-$' + Math.abs(n) : '$' + n); } %>
+  <% function pf(n) { return n === null ? '—' : (n === Infinity ? '∞' : n); } %>
   <% if (report.trades) { %>
   <div class="card">
+    <h3>Result</h3>
     <div class="stats">
-      <div class="stat">Net P&L <b class="<%= cls(report.netPnl) %>">$<%= report.netPnl %></b></div>
-      <div class="stat">Closed trades <b><%= report.trades %></b></div>
+      <div class="stat">Net P&L <b class="<%= cls(report.netPnl) %>"><%= money(report.netPnl) %></b><small>gross +<%= report.grossWin %> / −<%= report.grossLoss %></small></div>
+      <div class="stat">Closed trades <b><%= report.trades %></b><small><%= report.wins %>W / <%= report.losses %>L</small></div>
       <div class="stat">Win rate <b><%= report.winRate %>%</b></div>
-      <div class="stat">Profit factor <b><%= report.profitFactor === null ? '—' : report.profitFactor %></b></div>
-      <div class="stat">Expectancy / trade <b class="<%= cls(report.expectancy) %>">$<%= report.expectancy %></b></div>
+      <div class="stat">Profit factor <b><%= pf(report.profitFactor) %></b><small>&gt;1.5 good, &gt;2 excellent</small></div>
+      <div class="stat">Expectancy / trade <b class="<%= cls(report.expectancy) %>"><%= money(report.expectancy) %></b><small>positive = real edge</small></div>
       <div class="stat">Payoff (avgW/avgL) <b><%= report.payoff ?? '—' %></b></div>
-      <div class="stat">Avg win <b class="pos">$<%= report.avgWin ?? '—' %></b></div>
-      <div class="stat">Avg loss <b class="neg">$<%= report.avgLoss ?? '—' %></b></div>
-      <div class="stat">Largest win <b class="pos">$<%= report.largestWin ?? '—' %></b></div>
-      <div class="stat">Largest loss <b class="neg">$<%= report.largestLoss ?? '—' %></b></div>
-      <div class="stat">Max drawdown <b class="neg">$<%= report.maxDrawdown %></b></div>
-      <div class="stat">Avg hold <b><%= report.avgHoldDays %>d</b></div>
+      <div class="stat">Avg win <b class="pos"><%= money(report.avgWin) %></b></div>
+      <div class="stat">Avg loss <b class="neg"><%= money(report.avgLoss) %></b></div>
+      <div class="stat">Largest win <b class="pos"><%= money(report.largestWin) %></b><small><%= report.topTradeShare ?? '—' %>% of gross profit</small></div>
+      <div class="stat">Largest loss <b class="neg"><%= money(report.largestLoss) %></b><small>= <%= report.largestLossInAvgWins ?? '—' %> avg wins</small></div>
+      <div class="stat">Max drawdown <b class="neg"><%= money(report.maxDrawdown) %></b><small>of realized P&L, exit order</small></div>
+      <div class="stat">Recovery factor <b><%= report.recoveryFactor ?? '—' %></b><small>net ÷ max drawdown, &gt;2 comfortable</small></div>
     </div>
-    <p class="muted" style="font-size:.8rem;margin-top:.6rem">Guides: profit factor &gt;1.5 good, &gt;2 excellent · positive expectancy = real edge · win rate only matters together with payoff.</p>
   </div>
+
+  <div class="card">
+    <h3>Behaviour</h3>
+    <div class="stats">
+      <div class="stat">Avg hold <b><%= report.avgHoldDays %>d</b></div>
+      <div class="stat">Hold winners <b class="pos"><%= report.avgHoldWinners ?? '—' %>d</b></div>
+      <div class="stat">Hold losers <b class="neg"><%= report.avgHoldLosers ?? '—' %>d</b></div>
+      <div class="stat">Longest win streak <b class="pos"><%= report.maxWinStreak %></b></div>
+      <div class="stat">Longest loss streak <b class="neg"><%= report.maxLossStreak %></b></div>
+      <div class="stat">Ending on <b class="<%= report.currentStreak ? (report.currentStreak.type === 'win' ? 'pos' : 'neg') : '' %>"><%= report.currentStreak ? report.currentStreak.n + ' ' + report.currentStreak.type + (report.currentStreak.n > 1 ? 's' : '') : '—' %></b><small>current streak</small></div>
+      <div class="stat">Top market <b><%= report.topMarket ? report.topMarket.key : '—' %></b><small><%= report.topMarket ? report.topMarket.share + '% of gross profit' : '' %></small></div>
+      <div class="stat">Open exposure <b><%= report.openExposure %></b><small><%= report.openAtEnd.length %> open lots</small></div>
+    </div>
+    <% const notes = []; %>
+    <% if (report.avgHoldWinners != null && report.avgHoldLosers != null && report.avgHoldLosers > report.avgHoldWinners * 1.5) notes.push(['warn', `Losers are held ${report.avgHoldLosers}d vs ${report.avgHoldWinners}d for winners: losing trades are being given more time than winning ones.`]); %>
+    <% if (report.avgHoldWinners != null && report.avgHoldLosers != null && report.avgHoldWinners > report.avgHoldLosers * 1.5) notes.push(['good', `Winners run (${report.avgHoldWinners}d) and losers are cut (${report.avgHoldLosers}d): the hold pattern is healthy.`]); %>
+    <% if (report.topTradeShare != null && report.topTradeShare >= 50 && report.wins > 1) notes.push(['warn', `One trade produced ${report.topTradeShare}% of the gross profit. Without it the period looks very different.`]); %>
+    <% if (report.topMarket && report.topMarket.share >= 70 && report.bySymbol.length > 1) notes.push(['warn', `${report.topMarket.key} produced ${report.topMarket.share}% of the gross profit: results depend on one market.`]); %>
+    <% if (report.largestLossInAvgWins != null && report.largestLossInAvgWins >= 3) notes.push(['warn', `The largest loss wiped out ${report.largestLossInAvgWins} average wins. Check whether the stop was respected on that trade.`]); %>
+    <% if (report.winRate != null && report.winRate >= 60 && report.payoff != null && report.payoff < 1) notes.push(['warn', `A ${report.winRate}% win rate is hiding a payoff below 1 (${report.payoff}): the average loss is bigger than the average win.`]); %>
+    <% if (report.profitFactor !== null && report.profitFactor !== Infinity && report.profitFactor < 1) notes.push(['warn', `Profit factor ${report.profitFactor}: losses exceeded profits this period.`]); %>
+    <% if (report.recoveryFactor != null && report.recoveryFactor >= 2 && report.netPnl > 0) notes.push(['good', `Recovery factor ${report.recoveryFactor}: the profit was earned without a deep drawdown.`]); %>
+    <% if (report.maxLossStreak >= 4) notes.push(['warn', `A run of ${report.maxLossStreak} losses in a row. Worth checking whether size was reduced during it.`]); %>
+    <% for (const [k, text] of notes) { %><div class="insight <%= k %>"><%= text %></div><% } %>
+  </div>
+
+  <% if (equitySvg) { %>
+  <div class="card eq">
+    <h3>Realized P&L curve</h3>
+    <%- equitySvg %>
+    <p class="muted" style="font-size:.8rem">Cumulative P&L per closed trade, in exit order. Open positions are not included.</p>
+  </div>
+  <% } %>
+
+  <% if (isYear) { %>
+  <div class="card">
+    <h3>Month by month</h3>
+    <div class="stats" style="margin-bottom:.8rem">
+      <div class="stat">Profitable months <b><%= report.profitableMonths %>/<%= report.monthsActive %></b><small><%= report.profitableMonthRate ?? '—' %>% of active months</small></div>
+      <div class="stat">Best month <b class="pos"><%= report.bestMonth ? money(report.bestMonth.netPnl) : '—' %></b><small><%= report.bestMonth ? report.bestMonth.key : '' %></small></div>
+      <div class="stat">Worst month <b class="<%= report.worstMonth ? cls(report.worstMonth.netPnl) : '' %>"><%= report.worstMonth ? money(report.worstMonth.netPnl) : '—' %></b><small><%= report.worstMonth ? report.worstMonth.key : '' %></small></div>
+      <div class="stat">Avg monthly P&L <b class="<%= cls(report.avgMonthlyPnl) %>"><%= money(report.avgMonthlyPnl) %></b><small>active months only</small></div>
+      <div class="stat">Trades / month <b><%= report.tradesPerMonth ?? '—' %></b></div>
+    </div>
+    <table>
+      <tr><th>Month</th><th>Trades</th><th>W/L</th><th>Win rate</th><th>Net P&L</th><th>Profit factor</th><th>Expectancy</th><th>Cumulative</th></tr>
+      <% for (const m of report.byMonth) { %>
+      <tr class="<%= m.trades ? '' : 'muted' %>">
+        <td><a href="/trades/report/<%= m.key %>"><%= m.key %></a></td>
+        <td><%= m.trades %></td>
+        <td><%= m.trades ? m.wins + '/' + m.losses : '—' %></td>
+        <td><%= m.winRate == null ? '—' : m.winRate + '%' %></td>
+        <td class="<%= cls(m.netPnl) %>"><%= m.trades ? money(m.netPnl) : '—' %></td>
+        <td><%= m.trades ? pf(m.profitFactor) : '—' %></td>
+        <td class="<%= cls(m.expectancy) %>"><%= m.expectancy == null ? '—' : money(m.expectancy) %></td>
+        <td class="<%= cls(m.cumPnl) %>"><%= money(m.cumPnl) %></td>
+      </tr>
+      <% } %>
+    </table>
+    <% if (report.bestMonth && report.netPnl > 0 && report.bestMonth.netPnl >= report.netPnl && report.monthsActive > 1) { %>
+    <div class="insight warn" style="margin-top:.6rem">The year's net profit is entirely explained by <%= report.bestMonth.key %>; the other months net to <%= money(report.netPnl - report.bestMonth.netPnl) %> or less.</div>
+    <% } else if (report.profitableMonthRate != null && report.profitableMonthRate >= 70 && report.monthsActive >= 3) { %>
+    <div class="insight good" style="margin-top:.6rem"><%= report.profitableMonths %> of <%= report.monthsActive %> active months were profitable: the edge is showing up consistently, not in one lucky month.</div>
+    <% } %>
+  </div>
+  <% } %>
 
   <% if (coach) { %>
   <div class="card">
@@ -49,7 +138,7 @@
     <ul><% for (const s of coach.strengths) { %><li><%= s %></li><% } %></ul>
     <p><strong>What leaked:</strong></p>
     <ul><% for (const w of coach.weaknesses) { %><li><%= w %></li><% } %></ul>
-    <p><strong>Do next month:</strong></p>
+    <p><strong>Do next <%= isYear ? 'period' : 'month' %>:</strong></p>
     <ul><% for (const a of coach.actions) { %><li><%= a %></li><% } %></ul>
   </div>
   <% } %>
@@ -59,15 +148,16 @@
   <div class="card">
     <h3><%= title %></h3>
     <table>
-      <tr><th></th><th>Trades</th><th>W/L</th><th>Win rate</th><th>Net P&L</th><th>Expectancy</th><th>Avg hold</th></tr>
+      <tr><th></th><th>Trades</th><th>W/L</th><th>Win rate</th><th>Net P&L</th><th>Profit factor</th><th>Expectancy</th><th>Avg hold</th></tr>
       <% for (const b of rows) { %>
       <tr>
         <td><%= b.key %></td>
         <td><%= b.trades %></td>
         <td><%= b.wins %>/<%= b.losses %></td>
         <td><%= b.winRate %>%</td>
-        <td class="<%= cls(b.netPnl) %>">$<%= b.netPnl %></td>
-        <td class="<%= cls(b.expectancy) %>">$<%= b.expectancy %></td>
+        <td class="<%= cls(b.netPnl) %>"><%= money(b.netPnl) %></td>
+        <td><%= pf(b.profitFactor) %></td>
+        <td class="<%= cls(b.expectancy) %>"><%= money(b.expectancy) %></td>
         <td class="muted"><%= b.avgHoldDays %>d</td>
       </tr>
       <% } %>
@@ -76,7 +166,7 @@
   <% } %>
 
   <div class="card">
-    <h3>Closed trades in <%= ym %></h3>
+    <h3>Closed trades in <%= period %></h3>
     <table>
       <tr><th>Exit</th><th>Trade</th><th>Qty</th><th>Entry→Exit</th><th>Points</th><th>P&L</th><th>Held</th></tr>
       <% for (const t of report.closedTrades) { %>
@@ -86,7 +176,7 @@
         <td><%= t.qty %></td>
         <td><%= t.entryPrice %> → <%= t.exitPrice %></td>
         <td class="<%= cls(t.points) %>"><%= t.points %></td>
-        <td class="<%= cls(t.pnl || 0) %>"><%= t.pnl == null ? '—' : '$' + t.pnl %></td>
+        <td class="<%= cls(t.pnl || 0) %>"><%= t.pnl == null ? '—' : money(t.pnl) %></td>
         <td class="muted"><%= t.holdDays %>d</td>
       </tr>
       <% } %>
@@ -95,7 +185,7 @@
   <% } %>
 
   <div class="card">
-    <h3>Open positions<%= report.trades ? ' at month end' : '' %></h3>
+    <h3>Open positions<%= report.trades ? ' at period end' : '' %></h3>
     <% if (!report.openAtEnd.length) { %><p class="muted">Flat.</p><% } else { %>
     <table>
       <tr><th>Since</th><th>Position</th><th>Qty</th><th>Avg level</th></tr>

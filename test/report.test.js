@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { computeMonthlyReport, coachNotes } = require('../report');
+const { computeMonthlyReport, computePeriodReport, coachNotes } = require('../report');
 
 function rt(over) {
   return {
@@ -64,6 +64,58 @@ test('computeMonthlyReport empty month', () => {
   assert.equal(r.winRate, null);
   assert.equal(r.profitFactor, null);
   assert.equal(r.netPnl, 0);
+});
+
+test('computePeriodReport behaviour metrics: streaks, hold split, concentration', () => {
+  const r = computePeriodReport({ closed: CLOSED, open: [{ qty: 2 }, { qty: 1 }], period: '2026-07' });
+  assert.equal(r.kind, 'month');
+  // exit order: +500, +250, -200, -100
+  assert.equal(r.maxWinStreak, 2);
+  assert.equal(r.maxLossStreak, 2);
+  assert.deepEqual(r.currentStreak, { type: 'loss', n: 2 });
+  assert.equal(r.avgHoldWinners, 9);
+  assert.equal(r.avgHoldLosers, 9);
+  assert.equal(r.recoveryFactor, 1.5);          // 450 / 300
+  assert.equal(r.topTradeShare, 66.67);         // 500 / 750
+  assert.deepEqual(r.topMarket, { key: 'GF', share: 100 });
+  assert.equal(r.largestLossInAvgWins, 0.53);   // 200 / 375
+  assert.equal(r.openExposure, 3);
+  assert.deepEqual(r.equity.map((e) => e.cum), [500, 750, 550, 450]);
+  assert.equal(r.byMonth, undefined);
+});
+
+test('computePeriodReport year to date: month table, best/worst, consistency', () => {
+  const r = computePeriodReport({ closed: CLOSED, open: [], period: '2026', today: '2026-09-11' });
+  assert.equal(r.kind, 'year');
+  assert.equal(r.trades, 5);                    // August trade now included
+  assert.equal(r.netPnl, 850);
+  assert.equal(r.byMonth.length, 9);            // Jan..Sep (today's month)
+  assert.equal(r.byMonth[6].key, '2026-07');
+  assert.equal(r.byMonth[6].netPnl, 450);
+  assert.equal(r.byMonth[7].netPnl, 400);
+  assert.equal(r.byMonth[7].cumPnl, 850);
+  assert.equal(r.byMonth[8].trades, 0);         // September empty but listed
+  assert.equal(r.monthsActive, 2);
+  assert.equal(r.profitableMonths, 2);
+  assert.equal(r.profitableMonthRate, 100);
+  assert.equal(r.bestMonth.key, '2026-07');
+  assert.equal(r.worstMonth.key, '2026-08');
+  assert.equal(r.avgMonthlyPnl, 425);
+  assert.equal(r.tradesPerMonth, 2.5);
+});
+
+test('computePeriodReport past year lists all 12 months', () => {
+  const r = computePeriodReport({ closed: CLOSED, open: [], period: '2026', today: '2027-03-01' });
+  assert.equal(r.byMonth.length, 12);
+});
+
+test('coach prompt for YTD includes month-by-month block', async () => {
+  const r = computePeriodReport({ closed: CLOSED, open: [], period: '2026', today: '2026-09-11' });
+  let seen = null;
+  await coachNotes({ report: r, createMessage: async (args) => { seen = args; return { summary: '', strengths: [], weaknesses: [], actions: [] }; } });
+  assert.match(seen.user, /Year to date: 2026/);
+  assert.match(seen.user, /2026-07: 4 trades/);
+  assert.match(seen.user, /year-to-date review/);
 });
 
 test('coachNotes falls back to null without API key and flags source', async () => {
