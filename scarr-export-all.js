@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Bulk-export EVERY saved Scarr chart to CSV (last N years, one file per
-// strategy) into a target folder. Intended to run weekly.
+// strategy) into a target folder, in "batch N" folders of 20. Run on request;
+// the previous run's batches are archived to Old/<date>/, never deleted.
 //   node scarr-export-all.js [years] [outDir]
 
 const fs = require('fs');
@@ -51,19 +52,37 @@ async function main() {
     failures.forEach((f) => log(`  ${f.name} — ${f.error}`));
   }
 
-  // Re-batch into folders of 20 (Claude chat uploads max 20 files at a time).
-  batchInto(OUT_DIR, 20, log);
+  // Archive last run's batches, then batch into folders of 20 (Claude chat
+  // uploads max 20 files at a time).
+  batchInto(OUT_DIR, BATCH_SIZE, log);
 }
 
 const BATCH_SIZE = 20;
 
+function localDate(d) {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+// Move the previous run's "batch N" folders into Old/<date of that run>/ so
+// nothing is ever deleted and a new "batch 1" cannot collide with an old one.
+// Returns the archive folder, or null when there was nothing to archive.
+function archiveBatches(dir) {
+  const old = fs.readdirSync(dir)
+    .filter((e) => /^batch \d+$/.test(e) && fs.statSync(path.join(dir, e)).isDirectory());
+  if (!old.length) return null;
+  const newest = Math.max(...old.map((e) => fs.statSync(path.join(dir, e)).mtimeMs));
+  const base = localDate(new Date(newest));
+  let dest = path.join(dir, 'Old', base);
+  for (let n = 2; fs.existsSync(dest); n++) dest = path.join(dir, 'Old', `${base}-${n}`);
+  fs.mkdirSync(dest, { recursive: true });
+  for (const e of old) fs.renameSync(path.join(dir, e), path.join(dest, e));
+  return dest;
+}
+
 function batchInto(dir, size, log) {
-  // Clear last run's batch folders so we don't accumulate stale files.
-  for (const entry of fs.readdirSync(dir)) {
-    if (/^batch \d+$/.test(entry) && fs.statSync(path.join(dir, entry)).isDirectory()) {
-      fs.rmSync(path.join(dir, entry), { recursive: true, force: true });
-    }
-  }
+  const archived = archiveBatches(dir);
+  if (archived) log(`Archived previous batches to ${archived}`);
   const csvs = fs.readdirSync(dir)
     .filter((f) => f.endsWith('.csv'))
     .sort((a, b) => a.localeCompare(b));
@@ -75,4 +94,6 @@ function batchInto(dir, size, log) {
   log(`Batched ${csvs.length} files into ${batch} folders of up to ${size}.`);
 }
 
-main().catch((e) => { console.error('FATAL:', e.message); process.exit(1); });
+if (require.main === module) main().catch((e) => { console.error('FATAL:', e.message); process.exit(1); });
+
+module.exports = { archiveBatches, batchInto };
