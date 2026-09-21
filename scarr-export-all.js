@@ -26,13 +26,14 @@ async function main() {
   const names = await client.listSavedCharts();
   log(`${names.length} saved charts found.\n`);
 
-  let ok = 0; const failures = [];
+  let ok = 0; const failures = []; const unconfirmed = [];
   for (let i = 0; i < names.length; i++) {
     const name = names[i];
     try {
       const r = await exportChart({ client, name, years: YEARS, outDir: OUT_DIR, csvOnly: true });
       ok++;
-      log(`[${i + 1}/${names.length}] OK   ${name}  (${r.rows} rows, ${r.labels.length} years)`);
+      if (!r.frontConfirmed) unconfirmed.push(name);
+      log(`[${i + 1}/${names.length}] ${r.frontConfirmed ? 'OK  ' : 'WARN'} ${name}  (${r.rows} rows, ${r.labels.length} years, front ${r.labels[0]}${r.frontConfirmed ? '' : ' NOT CONFIRMED LIVE'})`);
     } catch (err) {
       failures.push({ name, error: err.message });
       log(`[${i + 1}/${names.length}] FAIL ${name}  — ${err.message}`);
@@ -41,6 +42,10 @@ async function main() {
   }
 
   log(`\nDone: ${ok} exported, ${failures.length} failed.`);
+  if (unconfirmed.length) {
+    log(`\n${unconfirmed.length} charts where the front year could not be confirmed as still trading (check these):`);
+    unconfirmed.forEach((n) => log(`  ${n}`));
+  }
   if (failures.length) {
     log('Failed charts:');
     failures.forEach((f) => log(`  ${f.name} — ${f.error}`));

@@ -24,6 +24,48 @@ function addDaysStr(d, n) {
   return dt.toISOString().slice(0, 10);
 }
 
+// Pick the LIVE FRONT column. Scarr maps every contract-year onto one shared
+// axis by shifting it a whole number of years. A cycle that is still trading
+// has its newest data point at REAL today, so on the axis it ends at
+// today - k years: k = 0 for the cycle the axis is anchored to, k = 1 for the
+// next one out, and so on. Completed years end wherever their expiry fell, not
+// there. Columns are newest-first, so the still-trading cycles are a leading
+// run with k stepping DOWN toward the nearest one; that nearest one is the
+// front. (Rules based on "ends nearest to today" or "stops short of the axis
+// end" both break: near expiry, and when the axis is anchored to a cycle that
+// has already expired.)
+// Returns { index, confirmed, k }. confirmed=false means no column could be
+// shown to be trading (stale feed, odd chart) and index is only the newest
+// column with data: callers should surface that, never trust it silently.
+function yearsBack(dateStr, k) {
+  return `${Number(dateStr.slice(0, 4)) - k}${dateStr.slice(4)}`;
+}
+function dayDiff(a, b) { // a - b in days
+  return Math.round((new Date(`${a}T00:00:00Z`) - new Date(`${b}T00:00:00Z`)) / 86400000);
+}
+function liveOffset(last, today, toleranceDays, maxK = 6) {
+  for (let k = 0; k <= maxK; k++) {
+    const d = dayDiff(yearsBack(today, k), last);
+    if (d >= 0 && d <= toleranceDays) return k;
+  }
+  return null;
+}
+function pickFrontIndex(dates, cols, today = new Date().toISOString().slice(0, 10), toleranceDays = 7) {
+  let front = null; let frontK = null; let skipped = 0;
+  for (let c = 0; c < cols.length; c++) {
+    let last = null;
+    for (let i = dates.length - 1; i >= 0; i--) if (cols[c][i] != null) { last = dates[i]; break; }
+    if (last == null) continue;                       // listed, no data yet
+    const k = liveOffset(last, today, toleranceDays);
+    if (k == null && front == null && skipped < 3) { skipped += 1; continue; } // thin far-out cycle, stale quote
+    if (k == null || (frontK != null && k >= frontK)) break; // run of live cycles ends
+    front = c; frontK = k;
+  }
+  if (front != null) return { index: front, confirmed: true, k: frontK };
+  const firstWithData = cols.findIndex((col) => col.some((v) => v != null));
+  return { index: firstWithData === -1 ? 0 : firstWithData, confirmed: false, k: null };
+}
+
 // Fetch + write one chart. Returns { name, labels, rows, csvPath, svgPath }.
 async function exportChart({ client, name, years = 10, outDir, csvOnly = false }) {
   const form = await client.fetchChartConfig(name);
@@ -38,21 +80,10 @@ async function exportChart({ client, name, years = 10, outDir, csvOnly = false }
   let { dates, cols } = full;
   let labels = rolled.selected;
 
-  // Pick the LIVE FRONT column: the newest anchor is often a future cycle whose
-  // data stopped ~a year ago. A prior year's data (already complete) runs to
-  // the axis end (future). The live front is the column whose data ends nearest
-  // to today. Drop any future cycles ahead of it, keep front + `years` priors.
-  const today = new Date().toISOString().slice(0, 10);
-  const grace = addDaysStr(today, 60);
-  const lastDate = cols.map((col) => {
-    for (let i = dates.length - 1; i >= 0; i--) if (col[i] != null) return dates[i];
-    return null;
-  });
-  let frontIdx = 0; let best = null;
-  for (let c = 0; c < cols.length; c++) {
-    const ld = lastDate[c];
-    if (ld != null && ld <= grace && (best == null || ld > best)) { best = ld; frontIdx = c; }
-  }
+  // Drop any further-out cycles ahead of the live front, keep front + `years`
+  // priors.
+  const front = pickFrontIndex(dates, cols);
+  const frontIdx = front.index;
   cols = cols.slice(frontIdx, frontIdx + years + 1);
   labels = labels.slice(frontIdx, frontIdx + years + 1);
 
@@ -83,7 +114,7 @@ async function exportChart({ client, name, years = 10, outDir, csvOnly = false }
     svgPath = path.join(outDir, `${base}.svg`);
     fs.writeFileSync(svgPath, svg);
   }
-  return { name, labels, rows: dates.length, csvPath, svgPath };
+  return { name, labels, rows: dates.length, csvPath, svgPath, frontConfirmed: front.confirmed };
 }
 
 async function main() {
@@ -112,4 +143,4 @@ async function main() {
 
 if (require.main === module) main().catch((e) => { console.error('ERROR:', e.message); process.exit(1); });
 
-module.exports = { exportChart, safeName };
+module.exports = { exportChart, safeName, pickFrontIndex };
